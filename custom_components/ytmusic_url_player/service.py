@@ -1,4 +1,4 @@
-"""Playback service with playlist queue support."""
+"""Playback service with playlist queue support - Simplified v1.6 style."""
 from __future__ import annotations
 
 import logging
@@ -63,16 +63,12 @@ def _get_cast_manager(hass: HomeAssistant) -> CastManager | None:
 
 def _is_cast_device(hass: HomeAssistant, entity_id: str) -> bool:
     """Check if entity is a Google Cast device."""
-    # Method 1: Check if entity is from cast integration
     if entity_id.startswith("media_player."):
         state = hass.states.get(entity_id)
         if state:
-            # Check for cast-specific attributes
             attrs = state.attributes
-            # Cast devices have app_id, app_name attributes
             if "app_id" in attrs or "app_name" in attrs:
                 return True
-            # Check entity registry for platform
             try:
                 from homeassistant.helpers import entity_registry as er
                 registry = er.async_get(hass)
@@ -85,11 +81,27 @@ def _is_cast_device(hass: HomeAssistant, entity_id: str) -> bool:
 
 
 def _get_cast_friendly_name(hass: HomeAssistant, entity_id: str) -> str | None:
-    """Get the friendly name of a Cast device for pychromecast."""
+    """Get the friendly name of a Cast device."""
     state = hass.states.get(entity_id)
     if state:
         return state.attributes.get("friendly_name") or state.name
     return None
+
+
+def _get_base_url(hass: HomeAssistant) -> str:
+    """Get base URL for HA proxy - simple approach like v1.6."""
+    # Try internal first (most common for local Cast devices)
+    try:
+        return get_url(hass, prefer_external=False)
+    except Exception:
+        pass
+    # Fallback to external
+    try:
+        return get_url(hass, prefer_external=True)
+    except Exception:
+        pass
+    # Last resort - use localhost (won't work for Cast but at least won't crash)
+    return "http://localhost:8123"
 
 
 async def _play_single_track(
@@ -99,63 +111,51 @@ async def _play_single_track(
     track_info: dict,
     is_music_url: bool = False,
 ) -> bool:
-    """Play a single track on the media_player.
+    """Play a single track on the media_player - v1.6 style (simple).
 
-    This is the callback used by QueueManager for playlist playback.
-    For Cast devices WITH screen: Uses native YouTube/YouTube Music app
-    For Cast devices WITHOUT screen (audio-only): Uses HA proxy for state tracking
-    For other devices: Uses HA proxy URL
+    Uses HA's media_player.play_media for all devices.
+    Native YouTube is only attempted for Cast devices WITH screen.
     """
-    _LOGGER.info("[Track] Playing %s on %s (is_music_url=%s)", video_id, entity_id, is_music_url)
+    _LOGGER.info("[Track] Playing %s on %s", video_id, entity_id)
 
-    # Check if this is a Cast device - use native YouTube playback
+    # For Cast devices WITH screen, try native YouTube first (better UX)
     if _is_cast_device(hass, entity_id):
         cast_manager = _get_cast_manager(hass)
         friendly_name = _get_cast_friendly_name(hass, entity_id)
 
         if cast_manager and friendly_name:
-            # Check if device is audio-only first - skip YouTube app for audio devices
             cast_type = await cast_manager.async_get_cast_type(friendly_name)
-            _LOGGER.info("[Track] Device type: %s", cast_type)
+            _LOGGER.debug("[Track] Cast device type: %s", cast_type)
 
-            if cast_type == 'audio':
-                _LOGGER.info("[Track] Audio-only device, skipping native YouTube (use HA proxy for state tracking)")
-            else:
-                # Device has screen - try native YouTube/YouTube Music app
+            # Only try native YouTube for devices with screen (cast type)
+            if cast_type and cast_type != 'audio':
                 try:
                     success = await cast_manager.async_play_youtube_native(
                         friendly_name, video_id, None, is_music_url
                     )
                     if success:
-                        app_name = "YouTube Music" if is_music_url else "YouTube"
-                        _LOGGER.info("[Track] ✓ Native %s playback: %s", app_name, video_id)
+                        _LOGGER.info("[Track] ✓ Native YouTube: %s", video_id)
                         return True
-                    else:
-                        _LOGGER.warning("[Track] Native YouTube failed, trying proxy fallback...")
                 except Exception as e:
-                    _LOGGER.warning("[Track] Native YouTube error: %s, trying proxy fallback...", e)
+                    _LOGGER.debug("[Track] Native YouTube failed: %s", e)
 
-    # Fallback: Extract stream and play directly or via proxy
-    _LOGGER.info("[Track] Using fallback for: %s", entity_id)
-
+    # Standard approach: Extract metadata and use HA proxy (v1.6 style)
     extractor = _get_extractor(hass)
     title = None
     thumb_url = None
     mime_type = "audio/mp4"
-    stream_url = None
 
     if extractor:
         try:
             metadata = await extractor.async_get_metadata(video_id)
-            _LOGGER.info("[Track] Extracted stream for: %s (mime: %s)", metadata.title, metadata.mime_type)
             title = metadata.title
             thumb_url = metadata.thumbnail_url
             mime_type = metadata.mime_type or "audio/mp4"
-            stream_url = metadata.stream_url
+            _LOGGER.info("[Track] Metadata: %s", title)
         except Exception as e:
-            _LOGGER.warning("[Track] Failed to extract stream: %s", e)
+            _LOGGER.warning("[Track] Metadata extraction failed: %s", e)
 
-    # Use track_info for metadata if not from extractor
+    # Use track_info as fallback for metadata
     if not title:
         track_title = track_info.get("title", "")
         artists = track_info.get("artists", [])
@@ -166,42 +166,18 @@ async def _play_single_track(
         thumbnails = track_info.get("thumbnails", [])
         thumb_url = thumbnails[-1].get("url") if thumbnails else None
 
-    # Fallback: Use HA proxy URL
-    # For Cast devices, we need a URL that's accessible from the local network
-    # Docker internal IPs (172.30.x.x) are not accessible from Cast devices
-    url_candidates = []
-    try:
-        external = get_url(hass, prefer_external=True)
-        url_candidates.append(external)
-        _LOGGER.debug("[Track] External URL: %s", external)
-    except Exception:
-        pass
-    try:
-        internal = get_url(hass, prefer_external=False)
-        # Skip docker internal IPs (172.30.x.x, 172.17.x.x) for Cast devices
-        if not internal.startswith("http://172.") and internal not in url_candidates:
-            url_candidates.append(internal)
-        elif internal.startswith("http://172."):
-            _LOGGER.debug("[Track] Skipping docker internal URL: %s", internal)
-    except Exception:
-        pass
-
-    if not url_candidates:
-        _LOGGER.error("[Track] Cannot get base URL")
-        return False
-
-    base_url = url_candidates[0]
+    # Build HA proxy URL (v1.6 style - simple)
+    base_url = _get_base_url(hass)
     media_url = f"{base_url}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
-    _LOGGER.info("[Track] Media URL: %s", media_url)
+    _LOGGER.info("[Track] Proxy URL: %s", media_url[:80])
 
-    # Build service data
+    # Call media_player.play_media (v1.6 style)
     service_data = {
         "entity_id": entity_id,
         "media_content_type": mime_type,
         "media_content_id": media_url,
     }
 
-    # Add metadata if available
     if title or thumb_url:
         service_data["extra"] = {}
         if title:
@@ -215,7 +191,7 @@ async def _play_single_track(
             service_data,
             blocking=True,
         )
-        _LOGGER.info("[Track] ✓ Success: %s", title or video_id)
+        _LOGGER.info("[Track] ✓ Playing: %s", title or video_id)
         return True
     except Exception as err:
         _LOGGER.error("[Track] ✗ Failed: %s", err)
@@ -231,102 +207,62 @@ async def _play_on_device(
     playlist_id: str | None = None,
     is_music_url: bool = False,
 ) -> bool:
-    """Play a video on a media_player device.
+    """Play a video on a media_player device - v1.6 style (simple).
 
-    For Cast devices WITH screen: Try native YouTube/YouTube Music casting first
-    For Cast devices WITHOUT screen (audio-only): Use HA proxy for state tracking
-    For other devices: Use HA proxy URL approach
+    Uses HA's media_player.play_media for all devices.
+    Native YouTube is only attempted for Cast devices WITH screen.
     """
-    _LOGGER.info("[Play] Starting playback: %s on %s (is_music_url=%s)", video_id, entity_id, is_music_url)
+    _LOGGER.info("[Play] Starting: %s on %s", video_id, entity_id)
 
-    # Check if this is a Cast device - try native YouTube playback first
+    # For Cast devices WITH screen, try native YouTube first
     if _is_cast_device(hass, entity_id):
         cast_manager = _get_cast_manager(hass)
         friendly_name = _get_cast_friendly_name(hass, entity_id)
 
         if cast_manager and friendly_name:
-            # Check if device is audio-only first
             cast_type = await cast_manager.async_get_cast_type(friendly_name)
-            _LOGGER.info("[Play] Device type: %s", cast_type)
+            _LOGGER.debug("[Play] Cast device type: %s", cast_type)
 
-            if cast_type == 'audio':
-                _LOGGER.info("[Play] Audio-only device, skipping native YouTube (use HA proxy for state tracking)")
-            else:
-                # Device has screen - try native YouTube/YouTube Music app
-                app_name = "YouTube Music" if is_music_url else "YouTube"
-                _LOGGER.info("[Play] Detected Cast device with screen, trying native %s playback", app_name)
-
+            # Only try native YouTube for devices with screen
+            if cast_type and cast_type != 'audio':
                 try:
                     success = await cast_manager.async_play_youtube_native(
                         friendly_name, video_id, playlist_id, is_music_url
                     )
-
                     if success:
-                        _LOGGER.info("[Play] ✓ Native %s playback started: %s", app_name, video_id)
+                        _LOGGER.info("[Play] ✓ Native YouTube: %s", video_id)
                         return True
-                    else:
-                        _LOGGER.warning("[Play] Native %s playback failed, trying proxy fallback...", app_name)
                 except Exception as e:
-                    _LOGGER.warning("[Play] Native %s error: %s, trying proxy fallback...", app_name, e)
+                    _LOGGER.debug("[Play] Native YouTube failed: %s", e)
 
-    # Fallback: Extract metadata and use HA proxy
-    # Note: We don't use direct stream (media_controller.play_media) because it shows as
-    # generic media receiver instead of YouTube app. HA proxy goes through media_player service
-    # which integrates properly with HA state tracking.
-    _LOGGER.info("[Play] Using HA proxy fallback for: %s", entity_id)
-
-    # Get extractor to extract metadata (for title, thumbnail)
+    # Standard approach: Extract metadata and use HA proxy (v1.6 style)
     extractor = _get_extractor(hass)
     mime_type = "audio/mp4"
 
     if extractor:
         try:
             metadata = await extractor.async_get_metadata(video_id)
-            _LOGGER.info("[Play] Extracted metadata for: %s (mime: %s)", metadata.title, metadata.mime_type)
             if not title:
                 title = metadata.title
             if not thumb_url:
                 thumb_url = metadata.thumbnail_url
             mime_type = metadata.mime_type or "audio/mp4"
+            _LOGGER.info("[Play] Metadata: %s", title)
         except Exception as e:
-            _LOGGER.warning("[Play] Failed to extract metadata: %s", e)
+            _LOGGER.warning("[Play] Metadata extraction failed: %s", e)
 
-    # Use HA proxy URL
-    # For Cast devices, we need a URL that's accessible from the local network
-    # Docker internal IPs (172.30.x.x) are not accessible from Cast devices
-    url_candidates = []
-    try:
-        external = get_url(hass, prefer_external=True)
-        url_candidates.append(external)
-        _LOGGER.debug("[Play] External URL: %s", external)
-    except Exception:
-        pass
-    try:
-        internal = get_url(hass, prefer_external=False)
-        # Skip docker internal IPs (172.30.x.x, 172.17.x.x) for Cast devices
-        if not internal.startswith("http://172.") and internal not in url_candidates:
-            url_candidates.append(internal)
-        elif internal.startswith("http://172."):
-            _LOGGER.debug("[Play] Skipping docker internal URL: %s", internal)
-    except Exception:
-        pass
-
-    if not url_candidates:
-        _LOGGER.error("[Play] Cannot get base URL")
-        return False
-
-    base_url = url_candidates[0]
+    # Build HA proxy URL (v1.6 style - simple)
+    base_url = _get_base_url(hass)
     media_url = f"{base_url}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
-    _LOGGER.info("[Play] Media URL: %s", media_url)
+    _LOGGER.info("[Play] Proxy URL: %s", media_url[:80])
 
-    # Build service data
+    # Call media_player.play_media (v1.6 style)
     service_data = {
         "entity_id": entity_id,
         "media_content_type": mime_type,
         "media_content_id": media_url,
     }
 
-    # Add metadata if available
     if title or thumb_url:
         service_data["extra"] = {}
         if title:
@@ -342,7 +278,7 @@ async def _play_on_device(
             service_data,
             blocking=True,
         )
-        _LOGGER.info("[Play] ✓ Success: %s", title or video_id)
+        _LOGGER.info("[Play] ✓ Playing: %s", title or video_id)
         return True
     except Exception as err:
         _LOGGER.error("[Play] ✗ Failed: %s", err)
@@ -357,9 +293,7 @@ async def async_play_url(
 ) -> None:
     """Main entry point for URL playback."""
     _LOGGER.info("=" * 60)
-    _LOGGER.info("[Service] play_url called")
-    _LOGGER.info("[Service] URL: %s", url)
-    _LOGGER.info("[Service] Target: %s", target_media_player)
+    _LOGGER.info("[Service] play_url: %s", url)
 
     cfg = {**entry.data, **(entry.options or {})}
     configured = cfg.get(CONF_MEDIA_PLAYER)
@@ -383,7 +317,7 @@ async def async_play_url(
             targets = [configured] if isinstance(configured, str) else list(configured)
 
     if not targets:
-        _LOGGER.error("[Service] No target media_player configured")
+        _LOGGER.error("[Service] No target media_player")
         raise ValueError("No target media_player configured")
 
     _LOGGER.info("[Service] Targets: %s", targets)
@@ -391,79 +325,24 @@ async def async_play_url(
     # Parse URL
     parsed = parse_url(url)
     if not parsed.video_id and not parsed.list_id:
-        _LOGGER.error("[Service] Could not parse URL: %s", url)
+        _LOGGER.error("[Service] Invalid URL: %s", url)
         raise ValueError(f"Could not parse URL: {url}")
 
-    _LOGGER.info("[Service] Parsed: video=%s, list=%s, is_music=%s", parsed.video_id, parsed.list_id, parsed.is_music_url)
+    _LOGGER.info("[Service] Parsed: video=%s, list=%s, is_music=%s",
+                 parsed.video_id, parsed.list_id, parsed.is_music_url)
 
     # Get clients
     client = _get_ytmusic_client(hass)
     queue_manager = _get_queue_manager(hass)
-    cast_manager = _get_cast_manager(hass)
 
-    # Check if all targets are Cast devices - try native YouTube/YouTube Music playback first
-    all_cast = all(_is_cast_device(hass, t) for t in targets)
-
-    if all_cast and cast_manager and parsed.video_id:
-        # Native YouTube/YouTube Music requires video_id
-        app_name = "YouTube Music" if parsed.is_music_url else "YouTube"
-        _LOGGER.info("[Service] All targets are Cast devices, trying native %s playback", app_name)
-
-        native_success = []
-        native_failed = []
-
-        for target in targets:
-            friendly_name = _get_cast_friendly_name(hass, target)
-            if not friendly_name:
-                native_failed.append(target)
-                continue
-
-            try:
-                if parsed.list_id:
-                    # Native YouTube playlist playback (requires video_id)
-                    _LOGGER.info("[Service] Playing %s playlist natively: %s", app_name, parsed.list_id)
-                    success = await cast_manager.async_play_youtube_native(
-                        friendly_name, parsed.video_id, parsed.list_id, parsed.is_music_url
-                    )
-                else:
-                    # Native YouTube/YouTube Music single video
-                    success = await cast_manager.async_play_youtube_native(
-                        friendly_name, parsed.video_id, None, parsed.is_music_url
-                    )
-
-                if success:
-                    native_success.append(target)
-                    _LOGGER.info("[Service] ✓ Native YouTube started on %s", target)
-                else:
-                    native_failed.append(target)
-                    _LOGGER.info("[Service] Native YouTube failed on %s (no YouTube app?)", target)
-            except Exception as e:
-                native_failed.append(target)
-                _LOGGER.warning("[Service] Native YouTube failed on %s: %s", target, e)
-
-        if native_success:
-            _LOGGER.info("[Service] ✓ Native YouTube playback on %d/%d devices", len(native_success), len(targets))
-
-            # If some devices failed, try proxy fallback for those
-            if native_failed:
-                _LOGGER.info("[Service] Trying proxy fallback for %d devices without YouTube app...", len(native_failed))
-                targets = native_failed  # Continue with failed devices only
-            else:
-                return  # All succeeded
-
-        if not native_success:
-            _LOGGER.warning("[Service] Native YouTube failed on all devices, trying proxy fallback...")
-
-    # Handle playlist with QueueManager for continuous playback (non-Cast or fallback)
+    # Handle playlist with QueueManager
     if parsed.list_id and queue_manager and client:
-        _LOGGER.info("[Service] Playlist detected, using QueueManager for continuous playback")
+        _LOGGER.info("[Service] Playlist mode")
 
         try:
-            # Get playlist tracks
             tracks = await client.async_get_playlist_video_ids(parsed.list_id, parsed.video_id)
 
             if tracks:
-                # Find start index if video_id is specified
                 start_index = 0
                 if parsed.video_id:
                     for i, track in enumerate(tracks):
@@ -471,18 +350,15 @@ async def async_play_url(
                             start_index = i
                             break
 
-                _LOGGER.info("[Service] Playlist loaded: %d tracks, starting at %d",
-                            len(tracks), start_index)
+                _LOGGER.info("[Service] %d tracks, starting at %d", len(tracks), start_index)
 
-                # Set up callback for queue manager (capture is_music_url from parsed URL)
-                is_music = parsed.is_music_url  # Capture for closure
+                # Callback with is_music_url captured
+                is_music = parsed.is_music_url
                 async def play_callback(entity_id: str, video_id: str, track_info: dict):
                     return await _play_single_track(hass, entity_id, video_id, track_info, is_music)
 
                 queue_manager.set_play_callback(play_callback)
 
-                # Start playlist on first target (queue manager handles one entity at a time)
-                success_count = 0
                 for target in targets:
                     try:
                         await queue_manager.start_playlist(
@@ -490,40 +366,27 @@ async def async_play_url(
                             tracks=tracks,
                             start_index=start_index,
                         )
-                        success_count += 1
                     except Exception as e:
-                        _LOGGER.error("[Service] Failed to start playlist on %s: %s", target, e)
+                        _LOGGER.error("[Service] Playlist start failed on %s: %s", target, e)
 
-                if success_count > 0:
-                    _LOGGER.info("[Service] ✓ Playlist started on %d devices", success_count)
-                    return
-
-                _LOGGER.warning("[Service] Playlist start failed, falling back to single track")
-            else:
-                _LOGGER.warning("[Service] Empty playlist, falling back to single track")
+                return
 
         except Exception as e:
-            _LOGGER.error("[Service] Failed to load playlist: %s", e)
-            # Fall through to single track playback
+            _LOGGER.error("[Service] Playlist load failed: %s", e)
 
-    # Single track playback (or playlist fallback)
+    # Single track playback
     video_id = parsed.video_id
 
-    if not video_id and parsed.list_id:
-        # Playlist URL without video_id - get first track
-        if client:
-            try:
-                _LOGGER.info("[Service] Getting first track from playlist: %s", parsed.list_id)
-                tracks = await client.async_get_playlist_video_ids(parsed.list_id, None)
-                if tracks and len(tracks) > 0:
-                    video_id = tracks[0].get("videoId")
-                    _LOGGER.info("[Service] First track: %s", video_id)
-            except Exception as e:
-                _LOGGER.error("[Service] Failed to get playlist: %s", e)
+    if not video_id and parsed.list_id and client:
+        try:
+            tracks = await client.async_get_playlist_video_ids(parsed.list_id, None)
+            if tracks:
+                video_id = tracks[0].get("videoId")
+        except Exception as e:
+            _LOGGER.error("[Service] Failed to get first track: %s", e)
 
     if not video_id:
-        _LOGGER.error("[Service] No video_id available")
-        raise ValueError("No video_id available from URL")
+        raise ValueError("No video_id available")
 
     # Play on each target
     success_count = 0
@@ -532,9 +395,9 @@ async def async_play_url(
             if await _play_on_device(hass, target, video_id, is_music_url=parsed.is_music_url):
                 success_count += 1
         except Exception as e:
-            _LOGGER.exception("[Service] Error playing on %s: %s", target, e)
+            _LOGGER.exception("[Service] Error on %s: %s", target, e)
 
-    _LOGGER.info("[Service] Completed: %d/%d devices succeeded", success_count, len(targets))
+    _LOGGER.info("[Service] Done: %d/%d succeeded", success_count, len(targets))
 
     if success_count == 0:
         raise RuntimeError(f"Playback failed on all {len(targets)} devices")
@@ -547,7 +410,7 @@ def _entity_or_entities(value):
         return cv.entity_id(value)
     if isinstance(value, list):
         return [cv.entity_id(v) for v in value]
-    raise vol.Invalid("media_player must be an entity_id or a list of entity_ids")
+    raise vol.Invalid("media_player must be an entity_id or a list")
 
 
 SERVICE_SCHEMA = vol.Schema(
@@ -569,8 +432,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         entries = hass.config_entries.async_entries(DOMAIN)
         if not entries:
-            _LOGGER.error("[Service] No config entry found")
-            raise RuntimeError("No config entry found for ytmusic_url_player")
+            raise RuntimeError("No config entry found")
 
         entry = entries[0]
         await async_play_url(hass, entry, url, target)
