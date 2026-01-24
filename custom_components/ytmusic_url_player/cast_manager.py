@@ -44,6 +44,13 @@ class CastManager:
             return cast.cast_info.cast_type
         return None
 
+    async def async_get_cast_type(self, friendly_name: str) -> str | None:
+        """Get the cast device type by friendly name (async version)."""
+        cast = await self._get_cast_device(friendly_name)
+        if not cast:
+            return None
+        return self._get_cast_type(cast)
+
     async def async_play_youtube_native(
         self,
         friendly_name: str,

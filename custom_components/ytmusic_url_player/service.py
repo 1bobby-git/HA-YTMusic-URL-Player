@@ -155,28 +155,34 @@ async def _play_single_track(
         thumbnails = track_info.get("thumbnails", [])
         thumb_url = thumbnails[-1].get("url") if thumbnails else None
 
-    # For Cast devices, try direct stream first (bypasses HA proxy network issues)
+    # For Cast devices WITH SCREEN, try direct stream (bypasses HA proxy network issues)
+    # Audio-only devices (Google Home, Nest Audio) should use HA proxy for proper state tracking
     if _is_cast_device(hass, entity_id) and stream_url:
         cast_manager = _get_cast_manager(hass)
         friendly_name = _get_cast_friendly_name(hass, entity_id)
 
         if cast_manager and friendly_name:
-            try:
-                _LOGGER.info("[Track] Trying direct stream to Cast device...")
-                success = await cast_manager.async_play_media_direct(
-                    friendly_name,
-                    stream_url,
-                    mime_type,
-                    title or video_id,
-                    thumb_url,
-                )
-                if success:
-                    _LOGGER.info("[Track] ✓ Direct stream success: %s", title or video_id)
-                    return True
-                else:
-                    _LOGGER.warning("[Track] Direct stream failed, trying HA proxy...")
-            except Exception as e:
-                _LOGGER.warning("[Track] Direct stream error: %s, trying HA proxy...", e)
+            # Check if device is audio-only - skip direct stream for better HA state tracking
+            cast_type = await cast_manager.async_get_cast_type(friendly_name)
+            if cast_type == 'audio':
+                _LOGGER.info("[Track] Audio-only device, skipping direct stream (use HA proxy for state tracking)")
+            else:
+                try:
+                    _LOGGER.info("[Track] Trying direct stream to Cast device...")
+                    success = await cast_manager.async_play_media_direct(
+                        friendly_name,
+                        stream_url,
+                        mime_type,
+                        title or video_id,
+                        thumb_url,
+                    )
+                    if success:
+                        _LOGGER.info("[Track] ✓ Direct stream success: %s", title or video_id)
+                        return True
+                    else:
+                        _LOGGER.warning("[Track] Direct stream failed, trying HA proxy...")
+                except Exception as e:
+                    _LOGGER.warning("[Track] Direct stream error: %s, trying HA proxy...", e)
 
     # Fallback: Use HA proxy URL
     try:
@@ -280,28 +286,34 @@ async def _play_on_device(
         except Exception as e:
             _LOGGER.warning("[Play] Failed to extract stream: %s", e)
 
-    # For Cast devices, try direct stream first (bypasses HA proxy network issues)
+    # For Cast devices WITH SCREEN, try direct stream (bypasses HA proxy network issues)
+    # Audio-only devices (Google Home, Nest Audio) should use HA proxy for proper state tracking
     if _is_cast_device(hass, entity_id) and stream_url:
         cast_manager = _get_cast_manager(hass)
         friendly_name = _get_cast_friendly_name(hass, entity_id)
 
         if cast_manager and friendly_name:
-            try:
-                _LOGGER.info("[Play] Trying direct stream to Cast device...")
-                success = await cast_manager.async_play_media_direct(
-                    friendly_name,
-                    stream_url,
-                    mime_type,
-                    title or video_id,
-                    thumb_url,
-                )
-                if success:
-                    _LOGGER.info("[Play] ✓ Direct stream success: %s", title or video_id)
-                    return True
-                else:
-                    _LOGGER.warning("[Play] Direct stream failed, trying HA proxy...")
-            except Exception as e:
-                _LOGGER.warning("[Play] Direct stream error: %s, trying HA proxy...", e)
+            # Check if device is audio-only - skip direct stream for better HA state tracking
+            cast_type = await cast_manager.async_get_cast_type(friendly_name)
+            if cast_type == 'audio':
+                _LOGGER.info("[Play] Audio-only device, skipping direct stream (use HA proxy for state tracking)")
+            else:
+                try:
+                    _LOGGER.info("[Play] Trying direct stream to Cast device...")
+                    success = await cast_manager.async_play_media_direct(
+                        friendly_name,
+                        stream_url,
+                        mime_type,
+                        title or video_id,
+                        thumb_url,
+                    )
+                    if success:
+                        _LOGGER.info("[Play] ✓ Direct stream success: %s", title or video_id)
+                        return True
+                    else:
+                        _LOGGER.warning("[Play] Direct stream failed, trying HA proxy...")
+                except Exception as e:
+                    _LOGGER.warning("[Play] Direct stream error: %s, trying HA proxy...", e)
 
     # Fallback: Use HA proxy URL
     try:
