@@ -167,15 +167,30 @@ async def _play_single_track(
         thumb_url = thumbnails[-1].get("url") if thumbnails else None
 
     # Fallback: Use HA proxy URL
+    # For Cast devices, we need a URL that's accessible from the local network
+    # Docker internal IPs (172.30.x.x) are not accessible from Cast devices
+    url_candidates = []
     try:
-        base_url = get_url(hass, prefer_external=False)
+        external = get_url(hass, prefer_external=True)
+        url_candidates.append(external)
+        _LOGGER.debug("[Track] External URL: %s", external)
     except Exception:
-        try:
-            base_url = get_url(hass, prefer_external=True)
-        except Exception as e:
-            _LOGGER.error("[Track] Cannot get base URL: %s", e)
-            return False
+        pass
+    try:
+        internal = get_url(hass, prefer_external=False)
+        # Skip docker internal IPs (172.30.x.x, 172.17.x.x) for Cast devices
+        if not internal.startswith("http://172.") and internal not in url_candidates:
+            url_candidates.append(internal)
+        elif internal.startswith("http://172."):
+            _LOGGER.debug("[Track] Skipping docker internal URL: %s", internal)
+    except Exception:
+        pass
 
+    if not url_candidates:
+        _LOGGER.error("[Track] Cannot get base URL")
+        return False
+
+    base_url = url_candidates[0]
     media_url = f"{base_url}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
     _LOGGER.info("[Track] Media URL: %s", media_url)
 
@@ -277,15 +292,30 @@ async def _play_on_device(
             _LOGGER.warning("[Play] Failed to extract metadata: %s", e)
 
     # Use HA proxy URL
+    # For Cast devices, we need a URL that's accessible from the local network
+    # Docker internal IPs (172.30.x.x) are not accessible from Cast devices
+    url_candidates = []
     try:
-        base_url = get_url(hass, prefer_external=False)
+        external = get_url(hass, prefer_external=True)
+        url_candidates.append(external)
+        _LOGGER.debug("[Play] External URL: %s", external)
     except Exception:
-        try:
-            base_url = get_url(hass, prefer_external=True)
-        except Exception as e:
-            _LOGGER.error("[Play] Cannot get base URL: %s", e)
-            return False
+        pass
+    try:
+        internal = get_url(hass, prefer_external=False)
+        # Skip docker internal IPs (172.30.x.x, 172.17.x.x) for Cast devices
+        if not internal.startswith("http://172.") and internal not in url_candidates:
+            url_candidates.append(internal)
+        elif internal.startswith("http://172."):
+            _LOGGER.debug("[Play] Skipping docker internal URL: %s", internal)
+    except Exception:
+        pass
 
+    if not url_candidates:
+        _LOGGER.error("[Play] Cannot get base URL")
+        return False
+
+    base_url = url_candidates[0]
     media_url = f"{base_url}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
     _LOGGER.info("[Play] Media URL: %s", media_url)
 
