@@ -97,14 +97,16 @@ async def _play_single_track(
     entity_id: str,
     video_id: str,
     track_info: dict,
+    is_music_url: bool = False,
 ) -> bool:
     """Play a single track on the media_player.
 
     This is the callback used by QueueManager for playlist playback.
-    For Cast devices: Uses native YouTube playback
+    For Cast devices WITH screen: Uses native YouTube/YouTube Music app
+    For Cast devices WITHOUT screen (audio-only): Uses HA proxy for state tracking
     For other devices: Uses HA proxy URL
     """
-    _LOGGER.info("[Track] Playing %s on %s", video_id, entity_id)
+    _LOGGER.info("[Track] Playing %s on %s (is_music_url=%s)", video_id, entity_id, is_music_url)
 
     # Check if this is a Cast device - use native YouTube playback
     if _is_cast_device(hass, entity_id):
@@ -112,17 +114,26 @@ async def _play_single_track(
         friendly_name = _get_cast_friendly_name(hass, entity_id)
 
         if cast_manager and friendly_name:
-            try:
-                success = await cast_manager.async_play_youtube_native(
-                    friendly_name, video_id
-                )
-                if success:
-                    _LOGGER.info("[Track] ✓ Native YouTube playback: %s", video_id)
-                    return True
-                else:
-                    _LOGGER.warning("[Track] Native YouTube failed, trying proxy fallback...")
-            except Exception as e:
-                _LOGGER.warning("[Track] Native YouTube error: %s, trying proxy fallback...", e)
+            # Check if device is audio-only first - skip YouTube app for audio devices
+            cast_type = await cast_manager.async_get_cast_type(friendly_name)
+            _LOGGER.info("[Track] Device type: %s", cast_type)
+
+            if cast_type == 'audio':
+                _LOGGER.info("[Track] Audio-only device, skipping native YouTube (use HA proxy for state tracking)")
+            else:
+                # Device has screen - try native YouTube/YouTube Music app
+                try:
+                    success = await cast_manager.async_play_youtube_native(
+                        friendly_name, video_id, None, is_music_url
+                    )
+                    if success:
+                        app_name = "YouTube Music" if is_music_url else "YouTube"
+                        _LOGGER.info("[Track] ✓ Native %s playback: %s", app_name, video_id)
+                        return True
+                    else:
+                        _LOGGER.warning("[Track] Native YouTube failed, trying proxy fallback...")
+                except Exception as e:
+                    _LOGGER.warning("[Track] Native YouTube error: %s, trying proxy fallback...", e)
 
     # Fallback: Extract stream and play directly or via proxy
     _LOGGER.info("[Track] Using fallback for: %s", entity_id)
@@ -154,35 +165,6 @@ async def _play_single_track(
     if not thumb_url:
         thumbnails = track_info.get("thumbnails", [])
         thumb_url = thumbnails[-1].get("url") if thumbnails else None
-
-    # For Cast devices WITH SCREEN, try direct stream (bypasses HA proxy network issues)
-    # Audio-only devices (Google Home, Nest Audio) should use HA proxy for proper state tracking
-    if _is_cast_device(hass, entity_id) and stream_url:
-        cast_manager = _get_cast_manager(hass)
-        friendly_name = _get_cast_friendly_name(hass, entity_id)
-
-        if cast_manager and friendly_name:
-            # Check if device is audio-only - skip direct stream for better HA state tracking
-            cast_type = await cast_manager.async_get_cast_type(friendly_name)
-            if cast_type == 'audio':
-                _LOGGER.info("[Track] Audio-only device, skipping direct stream (use HA proxy for state tracking)")
-            else:
-                try:
-                    _LOGGER.info("[Track] Trying direct stream to Cast device...")
-                    success = await cast_manager.async_play_media_direct(
-                        friendly_name,
-                        stream_url,
-                        mime_type,
-                        title or video_id,
-                        thumb_url,
-                    )
-                    if success:
-                        _LOGGER.info("[Track] ✓ Direct stream success: %s", title or video_id)
-                        return True
-                    else:
-                        _LOGGER.warning("[Track] Direct stream failed, trying HA proxy...")
-                except Exception as e:
-                    _LOGGER.warning("[Track] Direct stream error: %s, trying HA proxy...", e)
 
     # Fallback: Use HA proxy URL
     try:
@@ -232,90 +214,69 @@ async def _play_on_device(
     title: str | None = None,
     thumb_url: str | None = None,
     playlist_id: str | None = None,
+    is_music_url: bool = False,
 ) -> bool:
     """Play a video on a media_player device.
 
-    For Cast devices: Try native YouTube casting first (bypasses bot detection)
+    For Cast devices WITH screen: Try native YouTube/YouTube Music casting first
+    For Cast devices WITHOUT screen (audio-only): Use HA proxy for state tracking
     For other devices: Use HA proxy URL approach
     """
-    _LOGGER.info("[Play] Starting playback: %s on %s", video_id, entity_id)
+    _LOGGER.info("[Play] Starting playback: %s on %s (is_music_url=%s)", video_id, entity_id, is_music_url)
 
     # Check if this is a Cast device - try native YouTube playback first
     if _is_cast_device(hass, entity_id):
-        _LOGGER.info("[Play] Detected Cast device, trying native YouTube playback")
         cast_manager = _get_cast_manager(hass)
         friendly_name = _get_cast_friendly_name(hass, entity_id)
 
         if cast_manager and friendly_name:
-            try:
-                if playlist_id:
+            # Check if device is audio-only first
+            cast_type = await cast_manager.async_get_cast_type(friendly_name)
+            _LOGGER.info("[Play] Device type: %s", cast_type)
+
+            if cast_type == 'audio':
+                _LOGGER.info("[Play] Audio-only device, skipping native YouTube (use HA proxy for state tracking)")
+            else:
+                # Device has screen - try native YouTube/YouTube Music app
+                app_name = "YouTube Music" if is_music_url else "YouTube"
+                _LOGGER.info("[Play] Detected Cast device with screen, trying native %s playback", app_name)
+
+                try:
                     success = await cast_manager.async_play_youtube_native(
-                        friendly_name, video_id, playlist_id
-                    )
-                else:
-                    success = await cast_manager.async_play_youtube_native(
-                        friendly_name, video_id
+                        friendly_name, video_id, playlist_id, is_music_url
                     )
 
-                if success:
-                    _LOGGER.info("[Play] ✓ Native YouTube playback started: %s", video_id)
-                    return True
-                else:
-                    _LOGGER.warning("[Play] Native YouTube playback failed, trying proxy fallback...")
-            except Exception as e:
-                _LOGGER.warning("[Play] Native YouTube error: %s, trying proxy fallback...", e)
+                    if success:
+                        _LOGGER.info("[Play] ✓ Native %s playback started: %s", app_name, video_id)
+                        return True
+                    else:
+                        _LOGGER.warning("[Play] Native %s playback failed, trying proxy fallback...", app_name)
+                except Exception as e:
+                    _LOGGER.warning("[Play] Native %s error: %s, trying proxy fallback...", app_name, e)
 
-    # Fallback: Extract stream and play directly or via proxy
-    _LOGGER.info("[Play] Using fallback for: %s", entity_id)
+    # Fallback: Extract metadata and use HA proxy
+    # Note: We don't use direct stream (media_controller.play_media) because it shows as
+    # generic media receiver instead of YouTube app. HA proxy goes through media_player service
+    # which integrates properly with HA state tracking.
+    _LOGGER.info("[Play] Using HA proxy fallback for: %s", entity_id)
 
-    # Get extractor to extract stream
+    # Get extractor to extract metadata (for title, thumbnail)
     extractor = _get_extractor(hass)
     mime_type = "audio/mp4"
-    stream_url = None
 
     if extractor:
         try:
             metadata = await extractor.async_get_metadata(video_id)
-            _LOGGER.info("[Play] Extracted stream for: %s (mime: %s)", metadata.title, metadata.mime_type)
+            _LOGGER.info("[Play] Extracted metadata for: %s (mime: %s)", metadata.title, metadata.mime_type)
             if not title:
                 title = metadata.title
             if not thumb_url:
                 thumb_url = metadata.thumbnail_url
             mime_type = metadata.mime_type or "audio/mp4"
-            stream_url = metadata.stream_url
         except Exception as e:
-            _LOGGER.warning("[Play] Failed to extract stream: %s", e)
+            _LOGGER.warning("[Play] Failed to extract metadata: %s", e)
 
-    # For Cast devices WITH SCREEN, try direct stream (bypasses HA proxy network issues)
-    # Audio-only devices (Google Home, Nest Audio) should use HA proxy for proper state tracking
-    if _is_cast_device(hass, entity_id) and stream_url:
-        cast_manager = _get_cast_manager(hass)
-        friendly_name = _get_cast_friendly_name(hass, entity_id)
-
-        if cast_manager and friendly_name:
-            # Check if device is audio-only - skip direct stream for better HA state tracking
-            cast_type = await cast_manager.async_get_cast_type(friendly_name)
-            if cast_type == 'audio':
-                _LOGGER.info("[Play] Audio-only device, skipping direct stream (use HA proxy for state tracking)")
-            else:
-                try:
-                    _LOGGER.info("[Play] Trying direct stream to Cast device...")
-                    success = await cast_manager.async_play_media_direct(
-                        friendly_name,
-                        stream_url,
-                        mime_type,
-                        title or video_id,
-                        thumb_url,
-                    )
-                    if success:
-                        _LOGGER.info("[Play] ✓ Direct stream success: %s", title or video_id)
-                        return True
-                    else:
-                        _LOGGER.warning("[Play] Direct stream failed, trying HA proxy...")
-                except Exception as e:
-                    _LOGGER.warning("[Play] Direct stream error: %s, trying HA proxy...", e)
-
-    # Fallback: Use HA proxy URL
+    # Use HA proxy URL
     try:
         base_url = get_url(hass, prefer_external=False)
     except Exception:
@@ -483,9 +444,10 @@ async def async_play_url(
                 _LOGGER.info("[Service] Playlist loaded: %d tracks, starting at %d",
                             len(tracks), start_index)
 
-                # Set up callback for queue manager
+                # Set up callback for queue manager (capture is_music_url from parsed URL)
+                is_music = parsed.is_music_url  # Capture for closure
                 async def play_callback(entity_id: str, video_id: str, track_info: dict):
-                    return await _play_single_track(hass, entity_id, video_id, track_info)
+                    return await _play_single_track(hass, entity_id, video_id, track_info, is_music)
 
                 queue_manager.set_play_callback(play_callback)
 
@@ -537,7 +499,7 @@ async def async_play_url(
     success_count = 0
     for target in targets:
         try:
-            if await _play_on_device(hass, target, video_id):
+            if await _play_on_device(hass, target, video_id, is_music_url=parsed.is_music_url):
                 success_count += 1
         except Exception as e:
             _LOGGER.exception("[Service] Error playing on %s: %s", target, e)
