@@ -1,0 +1,16 @@
+play_url:
+  name: URL 재생
+  description: YouTube Music/YouTube URL을 파싱해서 media_player로 재생합니다. 재생 방식은 기기에 따라 자동 선택됩니다.
+  fields:
+    url:
+      required: true
+      example: "https://music.youtube.com/watch?v=noez-N3GwU8&feature=share"
+      selector:
+        text:
+    media_player:
+      required: false
+      example: "media_player.living_room_speaker"
+      selector:
+        entity:
+          domain: media_player
+          multiple: true

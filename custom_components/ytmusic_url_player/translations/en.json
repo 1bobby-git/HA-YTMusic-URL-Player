@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "YouTube Music URL Player",
+        "description": "Paste a YouTube Music/YouTube URL to automatically play on selected media_player(s).\n\nPlayback method is automatically selected based on device:\n• Cast devices: Play via YouTube app\n• Other devices: Direct stream URL → Proxy (fallback)\n\n[Auth (optional, for private playlists)]\nCopy Request Headers from Chrome DevTools and paste\nLeave empty for public content only\n\n[po_token (optional, for bot detection bypass)]\nSee: https://pytubefix.readthedocs.io/en/latest/user/po_token.html",
+        "data": {
+          "name": "Name",
+          "media_player": "Default target media_player(s)",
+          "auth_file": "Auth (paste Request Headers)",
+          "auto_play": "Auto-play when URL is set",
+          "po_token": "po_token (optional)",
+          "visitor_data": "visitor_data (optional)"
+        }
+      }
+    }
+  },
+  "services": {
+    "play_url": {
+      "name": "Play URL",
+      "description": "Parse and play a YouTube Music/YouTube URL on the media_player. Playback method is automatically selected.",
+      "fields": {
+        "url": {
+          "name": "URL",
+          "description": "YouTube/YouTube Music URL to play"
+        },
+        "media_player": {
+          "name": "Target",
+          "description": "Leave empty to use default target(s) from config"
+        }
+      }
+    }
+  }
+}

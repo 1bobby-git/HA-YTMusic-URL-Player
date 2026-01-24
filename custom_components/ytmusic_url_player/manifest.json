@@ -1,0 +1,16 @@
+{
+  "domain": "ytmusic_url_player",
+  "name": "YouTube Music URL Player",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": [
+    "ytmusicapi==1.9.1",
+    "pytubefix>=10.3.0",
+    "yt-dlp>=2024.1.0",
+    "pychromecast>=14.0.0"
+  ],
+  "version": "1.2.1"
+}
