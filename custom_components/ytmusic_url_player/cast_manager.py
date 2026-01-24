@@ -36,21 +36,33 @@ class CastManager:
         self._last_scan: float = 0
         self._scan_interval = CAST_SCAN_INTERVAL_SECONDS
 
+    def _get_cast_type(self, cast: Any) -> str | None:
+        """Get the cast device type (audio, cast, etc.)."""
+        if hasattr(cast, 'cast_type'):
+            return cast.cast_type
+        elif hasattr(cast, 'cast_info') and hasattr(cast.cast_info, 'cast_type'):
+            return cast.cast_info.cast_type
+        return None
+
     async def async_play_youtube_native(
         self,
         friendly_name: str,
         video_id: str,
         playlist_id: str | None = None,
+        is_music_url: bool = False,
     ) -> bool:
-        """Play YouTube video natively on Cast device.
+        """Play YouTube/YouTube Music natively on Cast device.
 
-        For devices WITH screen: Uses YouTube video app
-        For devices WITHOUT screen (audio-only): Uses YouTube Music app
+        For devices WITH screen:
+          - is_music_url=True  → YouTube Music app
+          - is_music_url=False → YouTube video app
+        For devices WITHOUT screen (audio-only):
+          - Returns False to trigger direct stream fallback
 
         This is the preferred method for Cast devices as it:
         - Bypasses bot detection completely
+        - Uses the appropriate app based on URL source
         - Supports video on devices with screens
-        - Uses YouTube's native player with all features
         """
         import pychromecast
         from pychromecast.controllers.youtube import YouTubeController
@@ -68,13 +80,8 @@ class CastManager:
                 cast.wait(timeout=10)
 
                 # Check if device is audio-only (no screen)
-                cast_type = None
-                if hasattr(cast, 'cast_type'):
-                    cast_type = cast.cast_type
-                elif hasattr(cast, 'cast_info') and hasattr(cast.cast_info, 'cast_type'):
-                    cast_type = cast.cast_info.cast_type
-
-                _LOGGER.debug("[CastMgr] Device type: %s", cast_type)
+                cast_type = self._get_cast_type(cast)
+                _LOGGER.debug("[CastMgr] Device type: %s, is_music_url: %s", cast_type, is_music_url)
 
                 # Audio-only devices (Google Home, etc.) - skip YouTube controllers
                 # YouTube/YouTubeMusic controllers often fail on audio-only devices
@@ -83,7 +90,26 @@ class CastManager:
                     _LOGGER.info("[CastMgr] Audio-only device detected, skipping YouTube controller (use direct stream)")
                     return False
 
-                # Devices with screen - use YouTube video app
+                # Devices with screen - choose app based on URL source
+                if is_music_url:
+                    # YouTube Music URL → Try YouTube Music app first
+                    try:
+                        from pychromecast.controllers.ytmusic import YouTubeMusicController
+                        ytm = YouTubeMusicController()
+                        cast.register_handler(ytm)
+
+                        _LOGGER.info("[CastMgr] Playing via YouTube Music app: %s", video_id)
+                        ytm.play_song(video_id)
+                        time.sleep(2)
+
+                        _LOGGER.info("[CastMgr] ✓ YouTube Music native playback started: %s", video_id)
+                        return True
+                    except ImportError:
+                        _LOGGER.warning("[CastMgr] YouTubeMusicController not available, falling back to YouTube app")
+                    except Exception as e:
+                        _LOGGER.warning("[CastMgr] YouTube Music app failed: %s, trying YouTube app...", e)
+
+                # YouTube URL or YouTube Music app failed → Use YouTube video app
                 yt = YouTubeController()
                 cast.register_handler(yt)
 

@@ -391,19 +391,20 @@ async def async_play_url(
         _LOGGER.error("[Service] Could not parse URL: %s", url)
         raise ValueError(f"Could not parse URL: {url}")
 
-    _LOGGER.info("[Service] Parsed: video=%s, list=%s", parsed.video_id, parsed.list_id)
+    _LOGGER.info("[Service] Parsed: video=%s, list=%s, is_music=%s", parsed.video_id, parsed.list_id, parsed.is_music_url)
 
     # Get clients
     client = _get_ytmusic_client(hass)
     queue_manager = _get_queue_manager(hass)
     cast_manager = _get_cast_manager(hass)
 
-    # Check if all targets are Cast devices - try native YouTube playback first
+    # Check if all targets are Cast devices - try native YouTube/YouTube Music playback first
     all_cast = all(_is_cast_device(hass, t) for t in targets)
 
     if all_cast and cast_manager and parsed.video_id:
-        # Native YouTube requires video_id
-        _LOGGER.info("[Service] All targets are Cast devices, trying native YouTube playback")
+        # Native YouTube/YouTube Music requires video_id
+        app_name = "YouTube Music" if parsed.is_music_url else "YouTube"
+        _LOGGER.info("[Service] All targets are Cast devices, trying native %s playback", app_name)
 
         native_success = []
         native_failed = []
@@ -417,14 +418,14 @@ async def async_play_url(
             try:
                 if parsed.list_id:
                     # Native YouTube playlist playback (requires video_id)
-                    _LOGGER.info("[Service] Playing YouTube playlist natively: %s", parsed.list_id)
+                    _LOGGER.info("[Service] Playing %s playlist natively: %s", app_name, parsed.list_id)
                     success = await cast_manager.async_play_youtube_native(
-                        friendly_name, parsed.video_id, parsed.list_id
+                        friendly_name, parsed.video_id, parsed.list_id, parsed.is_music_url
                     )
                 else:
-                    # Native YouTube single video
+                    # Native YouTube/YouTube Music single video
                     success = await cast_manager.async_play_youtube_native(
-                        friendly_name, parsed.video_id
+                        friendly_name, parsed.video_id, None, parsed.is_music_url
                     )
 
                 if success:

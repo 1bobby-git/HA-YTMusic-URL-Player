@@ -10,6 +10,7 @@ class ParsedUrl:
     video_id: str | None = None
     list_id: str | None = None
     browse_id: str | None = None
+    is_music_url: bool = False  # True if from music.youtube.com domain
 
 def parse_url(raw_url: str) -> ParsedUrl:
     raw_url = (raw_url or "").strip()
@@ -30,36 +31,39 @@ def parse_url(raw_url: str) -> ParsedUrl:
     host = (parsed.netloc or "").lower()
     path = parsed.path or ""
 
+    # Detect YouTube Music domain
+    is_music = "music.youtube.com" in host
+
     # youtu.be/<id>
     if host.endswith("youtu.be"):
         vid = path.strip("/").split("/")[0] if path.strip("/") else None
-        return ParsedUrl(raw=raw_url, kind="video", video_id=vid)
+        return ParsedUrl(raw=raw_url, kind="video", video_id=vid, is_music_url=False)
 
     # /watch?v=... (&list=...)
     if path.startswith("/watch"):
         vid = (qs.get("v") or [None])[0]
         lst = (qs.get("list") or [None])[0]
         if lst and not vid:
-            return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst)
+            return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst, is_music_url=is_music)
         if lst and vid:
             # user pasted a watch URL with list; treat as playlist (start track will be the first item)
-            return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst, video_id=vid)
+            return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst, video_id=vid, is_music_url=is_music)
         if vid:
-            return ParsedUrl(raw=raw_url, kind="video", video_id=vid)
+            return ParsedUrl(raw=raw_url, kind="video", video_id=vid, is_music_url=is_music)
 
     # /playlist?list=...
     if path.startswith("/playlist"):
         lst = (qs.get("list") or [None])[0]
-        return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst)
+        return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst, is_music_url=is_music)
 
     # /browse/<id>  (albums often MPREb..., playlists sometimes VL...)
     if path.startswith("/browse/"):
         bid = path.split("/browse/")[1].split("/")[0]
         if bid.startswith("VL") and len(bid) > 2:
-            return ParsedUrl(raw=raw_url, kind="playlist", list_id=bid[2:], browse_id=bid)
+            return ParsedUrl(raw=raw_url, kind="playlist", list_id=bid[2:], browse_id=bid, is_music_url=is_music)
         if bid.startswith("MPRE"):
-            return ParsedUrl(raw=raw_url, kind="album", list_id=bid, browse_id=bid)
-        return ParsedUrl(raw=raw_url, kind="unknown", browse_id=bid)
+            return ParsedUrl(raw=raw_url, kind="album", list_id=bid, browse_id=bid, is_music_url=is_music)
+        return ParsedUrl(raw=raw_url, kind="unknown", browse_id=bid, is_music_url=is_music)
 
     # /podcast/<id> (YouTube Music podcast)
     # Podcast IDs can be:
@@ -70,24 +74,24 @@ def parse_url(raw_url: str) -> ParsedUrl:
         if podcast_id:
             # YouTube video IDs are typically 11 characters
             if len(podcast_id) == 11:
-                return ParsedUrl(raw=raw_url, kind="video", video_id=podcast_id)
+                return ParsedUrl(raw=raw_url, kind="video", video_id=podcast_id, is_music_url=is_music)
             else:
                 # Longer ID - treat as playlist/browse ID
-                return ParsedUrl(raw=raw_url, kind="playlist", list_id=podcast_id, browse_id=podcast_id)
+                return ParsedUrl(raw=raw_url, kind="playlist", list_id=podcast_id, browse_id=podcast_id, is_music_url=is_music)
 
     # /channel/<id> (channel page - try to extract video if in URL)
     if path.startswith("/channel/"):
         # Check for video in query params
         vid = (qs.get("v") or [None])[0]
         if vid:
-            return ParsedUrl(raw=raw_url, kind="video", video_id=vid)
+            return ParsedUrl(raw=raw_url, kind="video", video_id=vid, is_music_url=is_music)
 
     # fallback: if has list=... anywhere
     lst = (qs.get("list") or [None])[0]
     vid = (qs.get("v") or [None])[0]
     if lst:
-        return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst, video_id=vid)
+        return ParsedUrl(raw=raw_url, kind="playlist", list_id=lst, video_id=vid, is_music_url=is_music)
     if vid:
-        return ParsedUrl(raw=raw_url, kind="video", video_id=vid)
+        return ParsedUrl(raw=raw_url, kind="video", video_id=vid, is_music_url=is_music)
 
-    return ParsedUrl(raw=raw_url, kind="unknown")
+    return ParsedUrl(raw=raw_url, kind="unknown", is_music_url=is_music)
