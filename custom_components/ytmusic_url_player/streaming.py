@@ -257,57 +257,85 @@ class StreamExtractor:
         }
         return metadata
 
+    def _invalidate_cache(self, video_id: str) -> None:
+        """Invalidate cached stream URL for a video."""
+        if video_id in self._cache:
+            del self._cache[video_id]
+            _LOGGER.info("[Stream] Cache invalidated for %s", video_id)
+
     async def async_proxy(self, request: web.Request, video_id: str) -> web.StreamResponse:
         _LOGGER.info("[Proxy] Proxy request for video_id=%s from %s", video_id, request.remote)
 
-        try:
-            audio_url, mime, base_headers = await self.async_get_audio(video_id)
-            _LOGGER.info("[Proxy] Got audio URL (length=%d), mime=%s", len(audio_url), mime)
-        except Exception as err:
-            _LOGGER.error("[Proxy] ✗ Failed to get audio URL for %s: %s", video_id, err)
-            return web.Response(status=500, text=f"Stream extraction failed: {err}")
+        # Retry logic for 403 errors (expired/blocked stream URLs)
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                audio_url, mime, base_headers = await self.async_get_audio(video_id)
+                _LOGGER.info("[Proxy] Got audio URL (length=%d), mime=%s", len(audio_url), mime)
+            except Exception as err:
+                _LOGGER.error("[Proxy] ✗ Failed to get audio URL for %s: %s", video_id, err)
+                return web.Response(status=500, text=f"Stream extraction failed: {err}")
 
-        req_headers = dict(base_headers)
-        range_header = request.headers.get("Range")
-        if range_header:
-            req_headers["Range"] = range_header
-            _LOGGER.debug("[Proxy] Range request: %s", range_header)
+            req_headers = dict(base_headers)
+            range_header = request.headers.get("Range")
+            if range_header:
+                req_headers["Range"] = range_header
+                _LOGGER.debug("[Proxy] Range request: %s", range_header)
 
-        _LOGGER.info("[Proxy] Fetching audio stream from YouTube...")
+            _LOGGER.info("[Proxy] Fetching audio stream from YouTube (attempt %d/%d)...", attempt + 1, max_retries)
 
-        try:
-            async with self._session.get(audio_url, headers=req_headers, timeout=30) as resp:
-                _LOGGER.info("[Proxy] YouTube response: status=%d, content-length=%s",
-                             resp.status, resp.headers.get("Content-Length", "unknown"))
+            try:
+                async with self._session.get(audio_url, headers=req_headers, timeout=30) as resp:
+                    _LOGGER.info("[Proxy] YouTube response: status=%d, content-length=%s",
+                                 resp.status, resp.headers.get("Content-Length", "unknown"))
 
-                if resp.status >= 400:
-                    _LOGGER.error("[Proxy] ✗ YouTube returned error status: %d", resp.status)
-                    return web.Response(status=resp.status, text=f"YouTube returned {resp.status}")
+                    if resp.status == 403:
+                        # Stream URL expired or blocked - invalidate cache and retry
+                        if attempt < max_retries - 1:
+                            _LOGGER.warning("[Proxy] YouTube returned 403, invalidating cache and retrying...")
+                            self._invalidate_cache(video_id)
+                            continue
+                        else:
+                            _LOGGER.error("[Proxy] ✗ YouTube returned 403 after %d attempts", max_retries)
+                            return web.Response(status=403, text="YouTube stream blocked after retries")
 
-                stream_resp = web.StreamResponse(status=resp.status)
-                ct = resp.headers.get("Content-Type") or mime
-                stream_resp.content_type = ct.split(";")[0]
+                    if resp.status >= 400:
+                        _LOGGER.error("[Proxy] ✗ YouTube returned error status: %d", resp.status)
+                        return web.Response(status=resp.status, text=f"YouTube returned {resp.status}")
 
-                # Add CORS headers for Cast devices
-                stream_resp.headers["Access-Control-Allow-Origin"] = "*"
-                stream_resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+                    # Success - stream the response
+                    stream_resp = web.StreamResponse(status=resp.status)
+                    ct = resp.headers.get("Content-Type") or mime
+                    stream_resp.content_type = ct.split(";")[0]
 
-                for h in ("Content-Length", "Accept-Ranges", "Content-Range"):
-                    if h in resp.headers:
-                        stream_resp.headers[h] = resp.headers[h]
-                await stream_resp.prepare(request)
+                    # Add CORS headers for Cast devices
+                    stream_resp.headers["Access-Control-Allow-Origin"] = "*"
+                    stream_resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
 
-                bytes_sent = 0
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    await stream_resp.write(chunk)
-                    bytes_sent += len(chunk)
+                    for h in ("Content-Length", "Accept-Ranges", "Content-Range"):
+                        if h in resp.headers:
+                            stream_resp.headers[h] = resp.headers[h]
+                    await stream_resp.prepare(request)
 
-                await stream_resp.write_eof()
-                _LOGGER.info("[Proxy] ✓ Streamed %d bytes for %s", bytes_sent, video_id)
-                return stream_resp
-        except Exception as err:
-            _LOGGER.error("[Proxy] ✗ Stream failed for %s: %s", video_id, err)
-            return web.Response(status=500, text=f"Stream failed: {err}")
+                    bytes_sent = 0
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        await stream_resp.write(chunk)
+                        bytes_sent += len(chunk)
+
+                    await stream_resp.write_eof()
+                    _LOGGER.info("[Proxy] ✓ Streamed %d bytes for %s", bytes_sent, video_id)
+                    return stream_resp
+
+            except Exception as err:
+                _LOGGER.error("[Proxy] ✗ Stream failed for %s: %s", video_id, err)
+                if attempt < max_retries - 1:
+                    _LOGGER.warning("[Proxy] Retrying after error...")
+                    self._invalidate_cache(video_id)
+                    continue
+                return web.Response(status=500, text=f"Stream failed: {err}")
+
+        # Should not reach here, but just in case
+        return web.Response(status=500, text="Proxy failed after retries")
 
 class YTMusicStreamView(HomeAssistantView):
     url = f"/api/{DOMAIN}/{API_STREAM_PATH}/{{video_id}}"
