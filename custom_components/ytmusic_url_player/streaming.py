@@ -153,17 +153,24 @@ class StreamExtractor:
             if not YT_DLP_AVAILABLE:
                 raise RuntimeError("yt-dlp not available")
 
-            _LOGGER.info("[Stream] Trying yt-dlp fallback...")
+            _LOGGER.info("[Stream] Trying yt-dlp...")
 
             ydl_opts = {
-                'format': 'bestaudio/best',
+                'format': 'bestaudio[ext=m4a]/bestaudio/best',
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
                 'nocheckcertificate': True,
-                # Use mobile user agent to avoid some bot detection
+                # v1.6 style: Better bot detection bypass
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios', 'android', 'web'],
+                        'player_skip': ['webpage', 'configs'],
+                    }
+                },
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+                    'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+                    'Accept-Language': 'en-US,en;q=0.9',
                 },
             }
 
@@ -232,17 +239,22 @@ class StreamExtractor:
             )
 
         def _extract():
-            """Try pytubefix first, fallback to yt-dlp on bot detection."""
+            """Try yt-dlp first (more reliable), fallback to pytubefix.
+
+            v1.6 style: yt-dlp has better bot detection bypass for audio-only Cast devices.
+            """
+            # yt-dlp first - more reliable for audio-only Cast devices
+            if YT_DLP_AVAILABLE:
+                try:
+                    return _extract_ytdlp()
+                except Exception as err:
+                    _LOGGER.warning("[Stream] yt-dlp failed for %s: %s, trying pytubefix...", video_id, err)
+
+            # Fallback to pytubefix
             try:
                 return _extract_pytubefix()
-            except BotDetection as err:
-                _LOGGER.warning("[Stream] pytubefix bot detection for %s, trying yt-dlp...", video_id)
-                return _extract_ytdlp()
             except Exception as err:
-                # Check if error message contains bot detection hint
-                if "bot" in str(err).lower() or "BotDetection" in str(type(err).__name__):
-                    _LOGGER.warning("[Stream] Possible bot detection for %s, trying yt-dlp...", video_id)
-                    return _extract_ytdlp()
+                _LOGGER.error("[Stream] pytubefix also failed for %s: %s", video_id, err)
                 raise
 
         try:
