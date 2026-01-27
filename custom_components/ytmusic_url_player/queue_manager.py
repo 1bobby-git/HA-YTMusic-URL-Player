@@ -10,6 +10,8 @@ from homeassistant.core import HomeAssistant, callback, Event
 from homeassistant.const import STATE_IDLE, STATE_PAUSED, STATE_PLAYING
 from homeassistant.helpers.event import async_track_state_change_event
 
+from .const import DOMAIN, DATA_EXTRACTOR
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -155,10 +157,38 @@ class QueueManager:
         if self._play_callback and video_id:
             try:
                 await self._play_callback(entity_id, video_id, track)
+
+                # After current track starts playing, pre-fetch next track metadata
+                next_idx = queue.current_index + 1
+                if next_idx < len(queue.tracks):
+                    next_track = queue.tracks[next_idx]
+                    next_video_id = next_track.get("videoId") or next_track.get("setVideoId")
+                    if next_video_id:
+                        # Pre-fetch in background - don't await, just fire-and-forget
+                        asyncio.create_task(self._prefetch_metadata(next_video_id))
+
             except Exception as e:
                 _LOGGER.error("[Queue] Failed to play track: %s", e)
                 # Try next track on error
                 await self._play_next(entity_id)
+
+    async def _prefetch_metadata(self, video_id: str) -> None:
+        """Pre-fetch next track metadata to warm cache."""
+        try:
+            # Access StreamExtractor from hass.data
+            domain_data = self.hass.data.get(DOMAIN, {})
+            for entry_id, store in domain_data.items():
+                if isinstance(store, dict):
+                    extractor = store.get(DATA_EXTRACTOR)
+                    if extractor is not None:
+                        _LOGGER.debug("[Queue] Pre-fetching metadata for next track: %s", video_id)
+                        await extractor.async_get_metadata(video_id)
+                        _LOGGER.info("[Queue] Pre-fetch completed for %s", video_id)
+                        return
+            _LOGGER.debug("[Queue] No extractor found for pre-fetching")
+        except Exception as err:
+            # Pre-fetch failure is non-critical, just log at debug level
+            _LOGGER.debug("[Queue] Pre-fetch failed for %s: %s", video_id, err)
 
     def get_queue_info(self, entity_id: str) -> dict[str, Any] | None:
         """Get queue information for an entity."""

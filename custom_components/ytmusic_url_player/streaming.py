@@ -45,16 +45,6 @@ class VideoMetadata:
     stream_url: str
     mime_type: str
 
-def build_stream_url(hass: HomeAssistant, video_id: str) -> str:
-    base = get_url(hass, prefer_external=False)
-    return f"{base}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
-
-def build_m3u_url(hass: HomeAssistant, list_id: str, video_id: str | None = None) -> str:
-    base = get_url(hass, prefer_external=False)
-    if video_id:
-        return f"{base}/api/{DOMAIN}/{API_M3U_PATH}/{list_id}.m3u?v={video_id}"
-    return f"{base}/api/{DOMAIN}/{API_M3U_PATH}/{list_id}.m3u"
-
 class StreamExtractor:
     def __init__(self, hass: HomeAssistant, config: dict[str, Any], session: ClientSession) -> None:
         self.hass = hass
@@ -83,8 +73,6 @@ class StreamExtractor:
             return cached["metadata"]
 
         loop = asyncio.get_running_loop()
-        po_token = self._po_token
-        visitor_data = self._visitor_data
 
         def _extract_pytubefix():
             """Try extraction with pytubefix using multiple client strategies."""

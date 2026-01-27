@@ -1,6 +1,7 @@
 """Playback service with playlist queue support - Simplified v1.6 style."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -104,113 +105,22 @@ def _get_base_url(hass: HomeAssistant) -> str:
     return "http://localhost:8123"
 
 
-async def _play_single_track(
-    hass: HomeAssistant,
-    entity_id: str,
-    video_id: str,
-    track_info: dict,
-    is_music_url: bool = False,
-) -> bool:
-    """Play a single track on the media_player - v1.6 style (simple).
-
-    Uses HA's media_player.play_media for all devices.
-    Native YouTube is only attempted for Cast devices WITH screen.
-    """
-    _LOGGER.info("[Track] Playing %s on %s", video_id, entity_id)
-
-    # For Cast devices WITH screen, try native YouTube first (better UX)
-    if _is_cast_device(hass, entity_id):
-        cast_manager = _get_cast_manager(hass)
-        friendly_name = _get_cast_friendly_name(hass, entity_id)
-
-        if cast_manager and friendly_name:
-            cast_type = await cast_manager.async_get_cast_type(friendly_name)
-            _LOGGER.debug("[Track] Cast device type: %s", cast_type)
-
-            # Only try native YouTube for devices with screen (cast type)
-            if cast_type and cast_type != 'audio':
-                try:
-                    success = await cast_manager.async_play_youtube_native(
-                        friendly_name, video_id, None, is_music_url
-                    )
-                    if success:
-                        _LOGGER.info("[Track] ✓ Native YouTube: %s", video_id)
-                        return True
-                except Exception as e:
-                    _LOGGER.debug("[Track] Native YouTube failed: %s", e)
-
-    # Standard approach: Extract metadata and use HA proxy (v1.6 style)
-    extractor = _get_extractor(hass)
-    title = None
-    thumb_url = None
-    mime_type = "audio/mp4"
-
-    if extractor:
-        try:
-            metadata = await extractor.async_get_metadata(video_id)
-            title = metadata.title
-            thumb_url = metadata.thumbnail_url
-            mime_type = metadata.mime_type or "audio/mp4"
-            _LOGGER.info("[Track] Metadata: %s", title)
-        except Exception as e:
-            _LOGGER.warning("[Track] Metadata extraction failed: %s", e)
-
-    # Use track_info as fallback for metadata
-    if not title:
-        track_title = track_info.get("title", "")
-        artists = track_info.get("artists", [])
-        artist_name = artists[0].get("name", "") if artists else ""
-        title = f"{artist_name} - {track_title}".strip(" -") if artist_name else track_title
-
-    if not thumb_url:
-        thumbnails = track_info.get("thumbnails", [])
-        thumb_url = thumbnails[-1].get("url") if thumbnails else None
-
-    # Build HA proxy URL (v1.6 style - simple)
-    base_url = _get_base_url(hass)
-    media_url = f"{base_url}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
-    _LOGGER.info("[Track] Proxy URL: %s", media_url[:80])
-
-    # Call media_player.play_media (v1.6 style)
-    service_data = {
-        "entity_id": entity_id,
-        "media_content_type": mime_type,
-        "media_content_id": media_url,
-    }
-
-    if title or thumb_url:
-        service_data["extra"] = {}
-        if title:
-            service_data["extra"]["title"] = title
-        if thumb_url:
-            service_data["extra"]["thumb"] = thumb_url
-
-    try:
-        await hass.services.async_call(
-            "media_player", "play_media",
-            service_data,
-            blocking=True,
-        )
-        _LOGGER.info("[Track] ✓ Playing: %s", title or video_id)
-        return True
-    except Exception as err:
-        _LOGGER.error("[Track] ✗ Failed: %s", err)
-        return False
-
-
 async def _play_on_device(
     hass: HomeAssistant,
     entity_id: str,
     video_id: str,
-    title: str | None = None,
-    thumb_url: str | None = None,
-    playlist_id: str | None = None,
     is_music_url: bool = False,
+    playlist_id: str | None = None,
+    track_info: dict | None = None,
 ) -> bool:
-    """Play a video on a media_player device - v1.6 style (simple).
+    """Play a video/track on a media_player device - v1.6 style (simple).
 
     Uses HA's media_player.play_media for all devices.
     Native YouTube is only attempted for Cast devices WITH screen.
+
+    Args:
+        track_info: Optional metadata fallback dict (from playlist tracks).
+                    Expected keys: title, artists, thumbnails.
     """
     _LOGGER.info("[Play] Starting: %s on %s", video_id, entity_id)
 
@@ -237,19 +147,31 @@ async def _play_on_device(
 
     # Standard approach: Extract metadata and use HA proxy (v1.6 style)
     extractor = _get_extractor(hass)
+    title = None
+    thumb_url = None
     mime_type = "audio/mp4"
 
     if extractor:
         try:
             metadata = await extractor.async_get_metadata(video_id)
-            if not title:
-                title = metadata.title
-            if not thumb_url:
-                thumb_url = metadata.thumbnail_url
+            title = metadata.title
+            thumb_url = metadata.thumbnail_url
             mime_type = metadata.mime_type or "audio/mp4"
             _LOGGER.info("[Play] Metadata: %s", title)
         except Exception as e:
             _LOGGER.warning("[Play] Metadata extraction failed: %s", e)
+
+    # Use track_info as fallback for metadata (playlist tracks provide this)
+    if track_info:
+        if not title:
+            track_title = track_info.get("title", "")
+            artists = track_info.get("artists", [])
+            artist_name = artists[0].get("name", "") if artists else ""
+            title = f"{artist_name} - {track_title}".strip(" -") if artist_name else track_title
+
+        if not thumb_url:
+            thumbnails = track_info.get("thumbnails", [])
+            thumb_url = thumbnails[-1].get("url") if thumbnails else None
 
     # Build HA proxy URL (v1.6 style - simple)
     base_url = _get_base_url(hass)
@@ -269,8 +191,6 @@ async def _play_on_device(
             service_data["extra"]["title"] = title
         if thumb_url:
             service_data["extra"]["thumb"] = thumb_url
-
-    _LOGGER.info("[Play] Calling media_player.play_media")
 
     try:
         await hass.services.async_call(
@@ -355,7 +275,7 @@ async def async_play_url(
                 # Callback with is_music_url captured
                 is_music = parsed.is_music_url
                 async def play_callback(entity_id: str, video_id: str, track_info: dict):
-                    return await _play_single_track(hass, entity_id, video_id, track_info, is_music)
+                    return await _play_on_device(hass, entity_id, video_id, is_music_url=is_music, track_info=track_info)
 
                 queue_manager.set_play_callback(play_callback)
 
@@ -388,14 +308,16 @@ async def async_play_url(
     if not video_id:
         raise ValueError("No video_id available")
 
-    # Play on each target
-    success_count = 0
-    for target in targets:
+    # Play on all targets in parallel
+    async def _play_target(target: str) -> bool:
         try:
-            if await _play_on_device(hass, target, video_id, is_music_url=parsed.is_music_url):
-                success_count += 1
+            return await _play_on_device(hass, target, video_id, is_music_url=parsed.is_music_url)
         except Exception as e:
             _LOGGER.exception("[Service] Error on %s: %s", target, e)
+            return False
+
+    results = await asyncio.gather(*[_play_target(t) for t in targets], return_exceptions=True)
+    success_count = sum(1 for r in results if r is True)
 
     _LOGGER.info("[Service] Done: %d/%d succeeded", success_count, len(targets))
 
