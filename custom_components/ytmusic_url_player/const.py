@@ -26,6 +26,26 @@ DATA_EXTRACTOR: Final = "extractor"
 DATA_TARGET_OVERRIDE: Final = "target_override"
 DATA_QUEUE_MANAGER: Final = "queue_manager"
 DATA_CAST_MANAGER: Final = "cast_manager"
+DATA_PLAYBACK_MODE: Final = "playback_mode"
+
+# ----------------------------
+# Playback Mode Constants
+# ----------------------------
+PLAYBACK_MODE_SEQUENTIAL: Final = "sequential"  # 순차반복
+PLAYBACK_MODE_ONCE: Final = "once"              # 1회재생
+PLAYBACK_MODE_SHUFFLE: Final = "shuffle"        # 랜덤재생
+
+PLAYBACK_MODE_OPTIONS: Final = [
+    PLAYBACK_MODE_SEQUENTIAL,
+    PLAYBACK_MODE_ONCE,
+    PLAYBACK_MODE_SHUFFLE,
+]
+
+PLAYBACK_MODE_LABELS: Final = {
+    PLAYBACK_MODE_SEQUENTIAL: "순차반복",
+    PLAYBACK_MODE_ONCE: "1회재생",
+    PLAYBACK_MODE_SHUFFLE: "랜덤재생",
+}
 
 # ----------------------------
 # Timing Constants (seconds)

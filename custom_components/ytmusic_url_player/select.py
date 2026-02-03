@@ -1,4 +1,4 @@
-"""Select entity for target media player override."""
+"""Select entity for target media player override and playback mode."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +14,10 @@ from .const import (
     CONF_MEDIA_PLAYER,
     DEFAULT_NAME,
     DATA_TARGET_OVERRIDE,
+    DATA_PLAYBACK_MODE,
+    PLAYBACK_MODE_SEQUENTIAL,
+    PLAYBACK_MODE_OPTIONS,
+    PLAYBACK_MODE_LABELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,6 +29,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     """Set up select entity."""
     async_add_entities([
         YTMusicTargetSelect(hass, entry),
+        YTMusicPlaybackModeSelect(hass, entry),
     ], update_before_add=False)
 
 
@@ -124,5 +129,61 @@ class YTMusicTargetSelect(SelectEntity):
             # friendly_name을 entity_id로 변환하여 저장
             entity_id = self._name_to_entity.get(option, option)
             store[DATA_TARGET_OVERRIDE] = entity_id
+
+        self.async_write_ha_state()
+
+
+class YTMusicPlaybackModeSelect(SelectEntity):
+    """Select entity for choosing playback mode."""
+
+    _attr_has_entity_name = True
+    _attr_name = "재생 모드"
+    _attr_icon = "mdi:repeat"
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the select entity."""
+        self.hass = hass
+        self.entry = entry
+        cfg = {**entry.data, **(entry.options or {})}
+        self._org_name = cfg.get(CONF_NAME, DEFAULT_NAME)
+        self._attr_unique_id = f"{entry.entry_id}_playback_mode"
+        # 옵션은 한글 레이블로 표시
+        self._attr_options = [PLAYBACK_MODE_LABELS[mode] for mode in PLAYBACK_MODE_OPTIONS]
+        # 기본값: 순차반복
+        self._attr_current_option = PLAYBACK_MODE_LABELS[PLAYBACK_MODE_SEQUENTIAL]
+        # 레이블 ↔ 모드 매핑
+        self._label_to_mode = {v: k for k, v in PLAYBACK_MODE_LABELS.items()}
+        self._mode_to_label = PLAYBACK_MODE_LABELS
+
+    async def async_added_to_hass(self) -> None:
+        """Called when entity is added to hass."""
+        await super().async_added_to_hass()
+        # 초기화 시 저장소에 기본 모드 설정
+        store = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        if DATA_PLAYBACK_MODE not in store:
+            store[DATA_PLAYBACK_MODE] = PLAYBACK_MODE_SEQUENTIAL
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.entry.entry_id)},
+            name=self._org_name,
+            manufacturer="Custom",
+            model="YTMusic URL Player",
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        """Handle option selection."""
+        if option not in self._attr_options:
+            raise ValueError("Invalid option")
+
+        self._attr_current_option = option
+        # 레이블을 모드 값으로 변환하여 저장
+        mode = self._label_to_mode.get(option, PLAYBACK_MODE_SEQUENTIAL)
+        store = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        store[DATA_PLAYBACK_MODE] = mode
+        _LOGGER.info("[PlaybackMode] Mode changed to: %s (%s)", option, mode)
 
         self.async_write_ha_state()

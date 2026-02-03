@@ -6,7 +6,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
 
-from .const import DOMAIN, DATA_YTMUSIC, DATA_EXTRACTOR, DATA_TARGET_OVERRIDE, DATA_QUEUE_MANAGER, DATA_CAST_MANAGER
+from .const import (
+    DOMAIN,
+    DATA_YTMUSIC,
+    DATA_EXTRACTOR,
+    DATA_TARGET_OVERRIDE,
+    DATA_QUEUE_MANAGER,
+    DATA_CAST_MANAGER,
+    DATA_PLAYBACK_MODE,
+    PLAYBACK_MODE_SEQUENTIAL,
+)
 from .ytmusic_client import YTMusicClient
 from .streaming import StreamExtractor, YTMusicM3UView, YTMusicStreamView
 from .service import async_register_services
@@ -31,13 +40,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Target override (set by select entity)
     store.setdefault(DATA_TARGET_OVERRIDE, None)
 
+    # Playback mode (set by select entity)
+    store.setdefault(DATA_PLAYBACK_MODE, PLAYBACK_MODE_SEQUENTIAL)
+
     # Stream extractor + HTTP views
     session = aiohttp_client.async_get_clientsession(hass)
     extractor = StreamExtractor(hass, config, session)
     store[DATA_EXTRACTOR] = extractor
 
     # Queue manager for playlist continuous playback
-    queue_manager = QueueManager(hass)
+    queue_manager = QueueManager(hass, entry_id=entry.entry_id)
     store[DATA_QUEUE_MANAGER] = queue_manager
 
     # Cast manager for pychromecast connection caching

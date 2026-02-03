@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -10,7 +11,14 @@ from homeassistant.core import HomeAssistant, callback, Event
 from homeassistant.const import STATE_IDLE, STATE_PAUSED, STATE_PLAYING
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN, DATA_EXTRACTOR
+from .const import (
+    DOMAIN,
+    DATA_EXTRACTOR,
+    DATA_PLAYBACK_MODE,
+    PLAYBACK_MODE_SEQUENTIAL,
+    PLAYBACK_MODE_ONCE,
+    PLAYBACK_MODE_SHUFFLE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,23 +28,37 @@ class PlaybackQueue:
     """Playback queue for a single media_player."""
     entity_id: str
     tracks: list[dict[str, Any]] = field(default_factory=list)
+    original_tracks: list[dict[str, Any]] = field(default_factory=list)  # 원본 순서 저장
     current_index: int = 0
     is_active: bool = False
     unsubscribe: Callable | None = None
+    is_shuffled: bool = False  # 셔플 적용 여부
 
 
 class QueueManager:
     """Manages playlist queues and continuous playback."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, entry_id: str | None = None) -> None:
         self.hass = hass
+        self._entry_id = entry_id
         self._queues: dict[str, PlaybackQueue] = {}
         self._play_callback: Callable | None = None
         self._lock = asyncio.Lock()
 
+    def set_entry_id(self, entry_id: str) -> None:
+        """Set the entry_id for accessing playback mode."""
+        self._entry_id = entry_id
+
     def set_play_callback(self, callback: Callable) -> None:
         """Set the callback function for playing a track."""
         self._play_callback = callback
+
+    def _get_playback_mode(self) -> str:
+        """Get current playback mode from hass.data."""
+        if not self._entry_id:
+            return PLAYBACK_MODE_SEQUENTIAL
+        store = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
+        return store.get(DATA_PLAYBACK_MODE, PLAYBACK_MODE_SEQUENTIAL)
 
     async def start_playlist(
         self,
@@ -53,11 +75,30 @@ class QueueManager:
                 _LOGGER.warning("[Queue] No tracks provided for %s", entity_id)
                 return
 
+            # 재생 모드 확인
+            playback_mode = self._get_playback_mode()
+            _LOGGER.info("[Queue] Playback mode: %s", playback_mode)
+
+            # 원본 트랙 저장
+            original_tracks = list(tracks)
+            play_tracks = list(tracks)
+            is_shuffled = False
+
+            # 랜덤재생 모드면 셔플
+            if playback_mode == PLAYBACK_MODE_SHUFFLE:
+                play_tracks = list(tracks)
+                random.shuffle(play_tracks)
+                is_shuffled = True
+                start_index = 0  # 셔플 시 처음부터 재생
+                _LOGGER.info("[Queue] Shuffled %d tracks", len(play_tracks))
+
             queue = PlaybackQueue(
                 entity_id=entity_id,
-                tracks=tracks,
+                tracks=play_tracks,
+                original_tracks=original_tracks,
                 current_index=start_index,
                 is_active=True,
+                is_shuffled=is_shuffled,
             )
 
             # Subscribe to state changes
@@ -70,8 +111,8 @@ class QueueManager:
             self._queues[entity_id] = queue
 
             _LOGGER.info(
-                "[Queue] Started playlist for %s: %d tracks, starting at %d",
-                entity_id, len(tracks), start_index
+                "[Queue] Started playlist for %s: %d tracks, starting at %d, mode=%s",
+                entity_id, len(play_tracks), start_index, playback_mode
             )
 
             # Play the first track
@@ -126,11 +167,27 @@ class QueueManager:
                 return
 
             queue.current_index += 1
+            playback_mode = self._get_playback_mode()
 
             if queue.current_index >= len(queue.tracks):
-                _LOGGER.info("[Queue] Playlist finished for %s", entity_id)
-                await self._stop_queue(entity_id)
-                return
+                # 재생 모드에 따른 동작
+                if playback_mode == PLAYBACK_MODE_ONCE:
+                    # 1회재생: 재생 종료
+                    _LOGGER.info("[Queue] Playlist finished for %s (mode=once)", entity_id)
+                    await self._stop_queue(entity_id)
+                    return
+
+                elif playback_mode == PLAYBACK_MODE_SHUFFLE:
+                    # 랜덤재생: 다시 셔플하고 처음부터
+                    _LOGGER.info("[Queue] Re-shuffling playlist for %s", entity_id)
+                    queue.tracks = list(queue.original_tracks)
+                    random.shuffle(queue.tracks)
+                    queue.current_index = 0
+
+                else:  # PLAYBACK_MODE_SEQUENTIAL
+                    # 순차반복: 처음부터 다시
+                    _LOGGER.info("[Queue] Looping playlist for %s (mode=sequential)", entity_id)
+                    queue.current_index = 0
 
             await self._play_current(entity_id)
 
