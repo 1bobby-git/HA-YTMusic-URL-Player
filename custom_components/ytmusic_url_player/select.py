@@ -159,10 +159,11 @@ class YTMusicPlaybackModeSelect(SelectEntity):
     async def async_added_to_hass(self) -> None:
         """Called when entity is added to hass."""
         await super().async_added_to_hass()
-        # 초기화 시 저장소에 기본 모드 설정
-        store = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
-        if DATA_PLAYBACK_MODE not in store:
-            store[DATA_PLAYBACK_MODE] = PLAYBACK_MODE_SEQUENTIAL
+        # 저장소에서 현재 모드 읽어서 UI 동기화
+        store = self.hass.data[DOMAIN][self.entry.entry_id]
+        current_mode = store.get(DATA_PLAYBACK_MODE, PLAYBACK_MODE_SEQUENTIAL)
+        self._attr_current_option = self._mode_to_label.get(current_mode, self._mode_to_label[PLAYBACK_MODE_SEQUENTIAL])
+        _LOGGER.debug("[PlaybackMode] Initialized with mode: %s", current_mode)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -182,7 +183,8 @@ class YTMusicPlaybackModeSelect(SelectEntity):
         self._attr_current_option = option
         # 레이블을 모드 값으로 변환하여 저장
         mode = self._label_to_mode.get(option, PLAYBACK_MODE_SEQUENTIAL)
-        store = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        # 직접 접근하여 실제 hass.data에 저장
+        store = self.hass.data[DOMAIN][self.entry.entry_id]
         store[DATA_PLAYBACK_MODE] = mode
         _LOGGER.info("[PlaybackMode] Mode changed to: %s (%s)", option, mode)
 
