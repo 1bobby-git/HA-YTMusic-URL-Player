@@ -183,9 +183,20 @@ class YTMusicPlaybackModeSelect(SelectEntity):
         self._attr_current_option = option
         # 레이블을 모드 값으로 변환하여 저장
         mode = self._label_to_mode.get(option, PLAYBACK_MODE_SEQUENTIAL)
+
         # 직접 접근하여 실제 hass.data에 저장
-        store = self.hass.data[DOMAIN][self.entry.entry_id]
-        store[DATA_PLAYBACK_MODE] = mode
-        _LOGGER.info("[PlaybackMode] Mode changed to: %s (%s)", option, mode)
+        try:
+            store = self.hass.data[DOMAIN][self.entry.entry_id]
+            store[DATA_PLAYBACK_MODE] = mode
+            _LOGGER.info(
+                "[PlaybackMode] Mode changed to: %s (%s), entry_id=%s, store_id=%s",
+                option, mode, self.entry.entry_id, id(store)
+            )
+            # 저장 확인
+            verify = store.get(DATA_PLAYBACK_MODE)
+            _LOGGER.info("[PlaybackMode] Verify stored value: %s", verify)
+        except KeyError as e:
+            _LOGGER.error("[PlaybackMode] Failed to access store: %s", e)
+            _LOGGER.error("[PlaybackMode] Domain data keys: %s", list(self.hass.data.get(DOMAIN, {}).keys()))
 
         self.async_write_ha_state()

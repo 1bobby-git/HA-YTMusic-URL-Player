@@ -56,9 +56,22 @@ class QueueManager:
     def _get_playback_mode(self) -> str:
         """Get current playback mode from hass.data."""
         if not self._entry_id:
+            _LOGGER.warning("[Queue] No entry_id set, defaulting to SEQUENTIAL")
             return PLAYBACK_MODE_SEQUENTIAL
-        store = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
-        return store.get(DATA_PLAYBACK_MODE, PLAYBACK_MODE_SEQUENTIAL)
+
+        domain_data = self.hass.data.get(DOMAIN)
+        if not domain_data:
+            _LOGGER.warning("[Queue] No domain data found")
+            return PLAYBACK_MODE_SEQUENTIAL
+
+        store = domain_data.get(self._entry_id)
+        if not store:
+            _LOGGER.warning("[Queue] No store found for entry_id=%s", self._entry_id)
+            return PLAYBACK_MODE_SEQUENTIAL
+
+        mode = store.get(DATA_PLAYBACK_MODE, PLAYBACK_MODE_SEQUENTIAL)
+        _LOGGER.debug("[Queue] Retrieved playback mode: %s (entry_id=%s)", mode, self._entry_id)
+        return mode
 
     async def start_playlist(
         self,
