@@ -32,7 +32,7 @@ class PlaybackQueue:
     current_index: int = 0
     is_active: bool = False
     unsubscribe: Callable | None = None
-    is_shuffled: bool = False  # 셔플 적용 여부
+    current_mode: str = PLAYBACK_MODE_SEQUENTIAL  # 현재 적용된 모드
 
 
 class QueueManager:
@@ -95,13 +95,11 @@ class QueueManager:
             # 원본 트랙 저장
             original_tracks = list(tracks)
             play_tracks = list(tracks)
-            is_shuffled = False
 
             # 랜덤재생 모드면 셔플
             if playback_mode == PLAYBACK_MODE_SHUFFLE:
                 play_tracks = list(tracks)
                 random.shuffle(play_tracks)
-                is_shuffled = True
                 start_index = 0  # 셔플 시 처음부터 재생
                 _LOGGER.info("[Queue] Shuffled %d tracks", len(play_tracks))
 
@@ -111,7 +109,7 @@ class QueueManager:
                 original_tracks=original_tracks,
                 current_index=start_index,
                 is_active=True,
-                is_shuffled=is_shuffled,
+                current_mode=playback_mode,
             )
 
             # Subscribe to state changes
@@ -179,8 +177,45 @@ class QueueManager:
             if not queue or not queue.is_active:
                 return
 
-            queue.current_index += 1
             playback_mode = self._get_playback_mode()
+
+            # 모드 변경 감지 및 트랙 리스트 재구성
+            if playback_mode != queue.current_mode:
+                _LOGGER.info(
+                    "[Queue] Mode changed: %s -> %s, restructuring playlist",
+                    queue.current_mode, playback_mode
+                )
+                current_track = queue.tracks[queue.current_index] if queue.current_index < len(queue.tracks) else None
+                current_video_id = current_track.get("videoId") if current_track else None
+
+                if playback_mode == PLAYBACK_MODE_SHUFFLE:
+                    # → 랜덤재생: 현재 트랙 제외하고 나머지 셔플
+                    remaining = [t for t in queue.original_tracks if t.get("videoId") != current_video_id]
+                    random.shuffle(remaining)
+                    # 현재 트랙을 맨 앞에 두고 나머지 셔플된 트랙 추가
+                    if current_track:
+                        queue.tracks = [current_track] + remaining
+                        queue.current_index = 0
+                    else:
+                        queue.tracks = remaining
+                        queue.current_index = 0
+                    _LOGGER.info("[Queue] Switched to shuffle: %d tracks", len(queue.tracks))
+
+                elif playback_mode == PLAYBACK_MODE_SEQUENTIAL:
+                    # → 순차재생: 원본 순서로 복원, 현재 트랙 위치 찾기
+                    queue.tracks = list(queue.original_tracks)
+                    if current_video_id:
+                        for i, t in enumerate(queue.tracks):
+                            if t.get("videoId") == current_video_id:
+                                queue.current_index = i
+                                break
+                    _LOGGER.info("[Queue] Switched to sequential: index=%d", queue.current_index)
+
+                # ONCE 모드는 리스트 변경 불필요 (다음 곡 끝나면 종료)
+                queue.current_mode = playback_mode
+
+            # 다음 트랙으로 이동
+            queue.current_index += 1
 
             if queue.current_index >= len(queue.tracks):
                 # 재생 모드에 따른 동작
