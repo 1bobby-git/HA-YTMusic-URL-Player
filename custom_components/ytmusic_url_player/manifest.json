@@ -12,5 +12,5 @@
     "yt-dlp>=2024.1.0",
     "pychromecast>=14.0.0"
   ],
-  "version": "1.8.3"
+  "version": "1.8.4"
 }

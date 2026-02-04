@@ -253,6 +253,15 @@ class QueueManager:
         video_id = track.get("videoId") or track.get("setVideoId")
         title = track.get("title", "Unknown")
 
+        # video_id 검증 추가
+        if not video_id:
+            _LOGGER.warning(
+                "[Queue] Track %d/%d has no videoId, skipping: %s",
+                queue.current_index + 1, len(queue.tracks), title
+            )
+            await self._play_next(entity_id)
+            return
+
         _LOGGER.info(
             "[Queue] Playing track %d/%d on %s: %s (%s)",
             queue.current_index + 1, len(queue.tracks),

@@ -140,7 +140,101 @@ class YTMusicClient:
         _LOGGER.info("[Playlist] Fetching playlist: list_id=%s, seed_video=%s", list_id, seed_video_id)
         loop = asyncio.get_running_loop()
 
+        def _normalize_track(track: dict) -> dict | None:
+            """Normalize track data from various sources."""
+            if not isinstance(track, dict):
+                return None
+
+            # videoId 찾기
+            video_id = track.get("videoId") or track.get("setVideoId") or track.get("id")
+            if not video_id:
+                return None
+
+            # title 정규화
+            title = track.get("title", "Unknown")
+            if title and title.isdigit() and len(title) <= 3:
+                title = f"Track {title}"
+
+            return {
+                "videoId": video_id,
+                "title": title,
+                "artists": track.get("artists", []),
+                "thumbnails": track.get("thumbnails", []),
+                "duration_seconds": track.get("duration_seconds"),
+            }
+
         def _fetch():
+            # PL 재생목록은 pytubefix/yt-dlp를 먼저 시도
+            if list_id.startswith("PL"):
+                _LOGGER.info("[Playlist] PL playlist detected, trying pytubefix first")
+                try:
+                    pl_url = f"https://www.youtube.com/playlist?list={list_id}"
+                    pl = PytubePlaylist(pl_url)
+                    tracks = []
+
+                    video_urls = list(pl.video_urls)
+                    _LOGGER.debug("[Playlist] pytubefix found %d video URLs", len(video_urls))
+
+                    for idx, url in enumerate(video_urls):
+                        try:
+                            if "v=" in url:
+                                vid = url.split("v=")[1].split("&")[0]
+                            elif "youtu.be/" in url:
+                                vid = url.split("youtu.be/")[1].split("?")[0]
+                            else:
+                                continue
+
+                            tracks.append({
+                                "videoId": vid,
+                                "title": f"Track {idx + 1}",
+                                "artists": [],
+                                "thumbnails": [],
+                            })
+                        except Exception as ve:
+                            _LOGGER.debug("[Playlist] Failed to parse video URL: %s", ve)
+                            continue
+
+                    if tracks:
+                        _LOGGER.info("[Playlist] ✓ pytubefix succeeded for PL playlist: %d tracks", len(tracks))
+                        return tracks
+                    _LOGGER.warning("[Playlist] pytubefix returned empty playlist")
+                except Exception as e:
+                    _LOGGER.warning("[Playlist] pytubefix failed for PL playlist %s: %s", list_id, e)
+
+                # PL 플레이리스트에서 pytubefix 실패 시 yt-dlp 시도
+                if YT_DLP_AVAILABLE:
+                    _LOGGER.info("[Playlist] Trying yt-dlp for PL playlist: %s", list_id)
+                    try:
+                        ydl_opts = {
+                            'extract_flat': True,
+                            'quiet': True,
+                            'no_warnings': True,
+                            'http_headers': {
+                                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+                            },
+                        }
+                        pl_url = f"https://www.youtube.com/playlist?list={list_id}"
+
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(pl_url, download=False)
+
+                        if info and info.get('entries'):
+                            tracks = []
+                            for entry in info['entries']:
+                                if entry and entry.get('id'):
+                                    tracks.append({
+                                        "videoId": entry.get('id'),
+                                        "title": entry.get('title', 'Unknown'),
+                                        "artists": [{"name": entry.get('uploader', entry.get('channel', 'Unknown'))}],
+                                        "duration_seconds": entry.get('duration', 0),
+                                        "thumbnails": [{"url": entry.get('thumbnail')}] if entry.get('thumbnail') else [],
+                                    })
+                            if tracks:
+                                _LOGGER.info("[Playlist] ✓ yt-dlp succeeded for PL playlist: %d tracks", len(tracks))
+                                return tracks
+                    except Exception as e:
+                        _LOGGER.warning("[Playlist] yt-dlp failed for PL playlist %s: %s", list_id, e)
+
             # Album browseIds often start with MPRE...
             if list_id.startswith("MPRE"):
                 _LOGGER.debug("[Playlist] Trying get_album (MPRE prefix)")
@@ -176,7 +270,20 @@ class YTMusicClient:
                 tracks = data.get("tracks", []) or []
                 if tracks:
                     _LOGGER.info("[Playlist] ✓ get_playlist succeeded: %d tracks", len(tracks))
-                    return tracks
+                    # 디버그 로깅: 첫 번째 트랙 구조 확인
+                    if tracks:
+                        _LOGGER.debug("[Playlist] First track structure: %s", tracks[0])
+                        _LOGGER.debug("[Playlist] First track keys: %s", list(tracks[0].keys()))
+
+                    # 정규화 및 유효한 트랙만 필터링
+                    normalized = [_normalize_track(t) for t in tracks]
+                    tracks = [t for t in normalized if t is not None]
+
+                    if tracks:
+                        _LOGGER.info("[Playlist] After normalization: %d valid tracks", len(tracks))
+                        return tracks
+                    else:
+                        _LOGGER.warning("[Playlist] All tracks filtered out after normalization")
                 _LOGGER.debug("[Playlist] get_playlist returned empty tracks")
             except Exception as e:
                 _LOGGER.warning("[Playlist] get_playlist failed for %s: %s", list_id, e)
