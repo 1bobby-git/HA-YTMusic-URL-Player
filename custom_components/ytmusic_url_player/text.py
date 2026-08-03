@@ -5,7 +5,7 @@ import logging
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN, CONF_NAME, CONF_AUTO_PLAY, DEFAULT_NAME
 from .service import async_play_url

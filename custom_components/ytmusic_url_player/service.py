@@ -360,3 +360,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         await async_play_url(hass, entry, url, target)
 
     hass.services.async_register(DOMAIN, SERVICE_PLAY_URL, _handle, schema=SERVICE_SCHEMA)
+
+
+def async_unregister_services(hass: HomeAssistant) -> None:
+    """Unregister domain services if present."""
+    if hass.services.has_service(DOMAIN, SERVICE_PLAY_URL):
+        hass.services.async_remove(DOMAIN, SERVICE_PLAY_URL)

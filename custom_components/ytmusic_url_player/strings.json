@@ -3,12 +3,33 @@
     "step": {
       "user": {
         "title": "YouTube Music URL Player",
-        "description": "YouTube Music/YouTube URL을 붙여넣어 선택한 media_player로 자동 재생합니다.\n\n재생 방식은 기기에 따라 자동으로 선택됩니다:\n• Cast 기기: YouTube 앱으로 재생\n• 기타 기기: 스트림 URL 직접 전달 → 프록시 순으로 시도\n\n[인증 (선택, 비공개 재생목록용)]\nChrome DevTools에서 Request Headers를 복사해서 붙여넣기\n비워두면 공개 콘텐츠만 재생 가능",
+        "description": "YouTube Music/YouTube URL을 붙여넣어 선택한 media_player로 자동 재생합니다.\n\n재생 방식은 기기에 따라 자동으로 선택됩니다:\n• Cast 기기: YouTube 앱으로 재생\n• 기타 기기: 스트림 URL 직접 전달 → 프록시 순으로 시도\n\n[인증 (선택, 비공개 재생목록용)]\nChrome DevTools에서 Request Headers를 복사해서 붙여넣기\n비워두면 공개 콘텐츠만 재생 가능\n\n[po_token (선택, 봇 감지 우회)]\n참고: https://pytubefix.readthedocs.io/en/latest/user/po_token.html",
         "data": {
           "name": "이름",
           "media_player": "기본 재생 대상 (복수 선택 가능)",
           "auth_file": "인증 (Request Headers 붙여넣기)",
-          "auto_play": "URL 입력 시 자동 재생"
+          "auto_play": "URL 입력 시 자동 재생",
+          "po_token": "po_token (선택)",
+          "visitor_data": "visitor_data (선택)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "YouTube Music URL Player가 이미 구성되어 있습니다."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "YouTube Music URL Player 설정",
+        "description": "기본 재생 대상, 인증 헤더, 재생 옵션을 수정합니다.",
+        "data": {
+          "name": "이름",
+          "media_player": "기본 재생 대상 (복수 선택 가능)",
+          "auth_file": "인증 (Request Headers 붙여넣기)",
+          "auto_play": "URL 입력 시 자동 재생",
+          "po_token": "po_token (선택)",
+          "visitor_data": "visitor_data (선택)"
         }
       }
     }

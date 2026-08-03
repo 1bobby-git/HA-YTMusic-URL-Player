@@ -13,6 +13,25 @@
           "visitor_data": "visitor_data (optional)"
         }
       }
+    },
+    "abort": {
+      "already_configured": "YouTube Music URL Player is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "YouTube Music URL Player options",
+        "description": "Update default targets, auth headers, and playback options.",
+        "data": {
+          "name": "Name",
+          "media_player": "Default target media_player(s)",
+          "auth_file": "Auth (paste Request Headers)",
+          "auto_play": "Auto-play when URL is set",
+          "po_token": "po_token (optional)",
+          "visitor_data": "visitor_data (optional)"
+        }
+      }
     }
   },
   "services": {

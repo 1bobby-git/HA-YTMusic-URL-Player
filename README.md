@@ -1,5 +1,7 @@
 # YouTube Music URL Player
 
+
+> **Compatibility**: Home Assistant **2024.12+** 권장 (OptionsFlow / DeviceInfo / Coordinator API 정리 반영).
 YouTube / YouTube Music URL을 Home Assistant 미디어 플레이어에서 재생하는 커스텀 통합입니다.
 
 > 단일 트랙뿐 아니라 **플레이리스트/앨범 연속 재생**을 지원하며, Cast 기기에서는 **네이티브 YouTube 앱**을 통한 재생도 가능합니다.
