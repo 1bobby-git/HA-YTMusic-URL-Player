@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import tempfile
+from pathlib import Path
 from typing import Any, Optional
 
 from homeassistant.core import HomeAssistant
@@ -125,7 +126,13 @@ class YTMusicClient:
                 with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                     json.dump(auth_data, f)
                     temp_path = f.name
-                return ytmusicapi.YTMusic(temp_path)
+                try:
+                    return ytmusicapi.YTMusic(temp_path)
+                finally:
+                    try:
+                        Path(temp_path).unlink()
+                    except FileNotFoundError:
+                        pass
 
             _LOGGER.warning("Could not parse auth headers (cookie not found), using anonymous mode")
             return ytmusicapi.YTMusic()
@@ -163,6 +170,10 @@ class YTMusicClient:
                 "duration_seconds": track.get("duration_seconds"),
             }
 
+        def _normalize_tracks(tracks: list[dict] | None) -> list[dict]:
+            normalized = [_normalize_track(track) for track in (tracks or [])]
+            return [track for track in normalized if track is not None]
+
         def _fetch():
             # PL 재생목록은 pytubefix/yt-dlp를 먼저 시도
             if list_id.startswith("PL"):
@@ -196,7 +207,7 @@ class YTMusicClient:
 
                     if tracks:
                         _LOGGER.info("[Playlist] ✓ pytubefix succeeded for PL playlist: %d tracks", len(tracks))
-                        return tracks
+                        return _normalize_tracks(tracks)
                     _LOGGER.warning("[Playlist] pytubefix returned empty playlist")
                 except Exception as e:
                     _LOGGER.warning("[Playlist] pytubefix failed for PL playlist %s: %s", list_id, e)
@@ -218,17 +229,17 @@ class YTMusicClient:
                         if info and info.get('entries'):
                             tracks = []
                             for entry in info['entries']:
-                                if entry and entry.get('id'):
+                                if entry:
                                     tracks.append({
-                                        "videoId": entry.get('id'),
+                                        "id": entry.get('id'),
                                         "title": entry.get('title', 'Unknown'),
                                         "artists": [{"name": entry.get('uploader', entry.get('channel', 'Unknown'))}],
-                                        "duration_seconds": entry.get('duration', 0),
+                                        "duration_seconds": entry.get('duration'),
                                         "thumbnails": [{"url": entry.get('thumbnail')}] if entry.get('thumbnail') else [],
                                     })
                             if tracks:
                                 _LOGGER.info("[Playlist] ✓ yt-dlp succeeded for PL playlist: %d tracks", len(tracks))
-                                return tracks
+                                return _normalize_tracks(tracks)
                     except Exception as e:
                         _LOGGER.warning("[Playlist] yt-dlp failed for PL playlist %s: %s", list_id, e)
 
@@ -239,7 +250,7 @@ class YTMusicClient:
                     data = self.yt.get_album(list_id)
                     tracks = data.get("tracks", []) or []
                     _LOGGER.info("[Playlist] ✓ get_album succeeded: %d tracks", len(tracks))
-                    return tracks
+                    return _normalize_tracks(tracks)
                 except Exception as e:
                     _LOGGER.warning("[Playlist] get_album failed for %s: %s", list_id, e)
 
@@ -256,7 +267,7 @@ class YTMusicClient:
                         tracks = data.get("tracks", []) or []
                         if tracks:
                             _LOGGER.info("[Playlist] ✓ get_album (from OLAK5uy_) succeeded: %d tracks", len(tracks))
-                            return tracks
+                            return _normalize_tracks(tracks)
                 except Exception as e:
                     _LOGGER.warning("[Playlist] Album lookup failed for %s: %s", list_id, e)
 
@@ -278,7 +289,7 @@ class YTMusicClient:
 
                     if tracks:
                         _LOGGER.info("[Playlist] After normalization: %d valid tracks", len(tracks))
-                        return tracks
+                        return _normalize_tracks(tracks)
                     else:
                         _LOGGER.warning("[Playlist] All tracks filtered out after normalization")
                 _LOGGER.debug("[Playlist] get_playlist returned empty tracks")
@@ -293,7 +304,7 @@ class YTMusicClient:
                     tracks = data.get("tracks", []) or []
                     if tracks:
                         _LOGGER.info("[Playlist] ✓ get_watch_playlist succeeded: %d tracks", len(tracks))
-                        return tracks
+                        return _normalize_tracks(tracks)
                 except Exception as e:
                     _LOGGER.warning("[Playlist] get_watch_playlist failed for %s: %s", list_id, e)
 
@@ -304,7 +315,7 @@ class YTMusicClient:
                     tracks = data.get("tracks", []) or []
                     if tracks:
                         _LOGGER.info("[Playlist] ✓ get_watch_playlist (video only) succeeded: %d tracks", len(tracks))
-                        return tracks
+                        return _normalize_tracks(tracks)
                 except Exception as e:
                     _LOGGER.warning("[Playlist] get_watch_playlist (video only) failed: %s", e)
 
@@ -343,7 +354,7 @@ class YTMusicClient:
 
                 if tracks:
                     _LOGGER.info("[Playlist] ✓ pytubefix fallback succeeded: %d tracks", len(tracks))
-                    return tracks
+                    return _normalize_tracks(tracks)
                 _LOGGER.warning("[Playlist] pytubefix returned empty playlist")
             except Exception as e:
                 _LOGGER.warning("[Playlist] pytubefix fallback failed for %s: %s", list_id, e)
@@ -365,17 +376,17 @@ class YTMusicClient:
                     if info and info.get('entries'):
                         tracks = []
                         for entry in info['entries']:
-                            if entry and entry.get('id'):
+                            if entry:
                                 tracks.append({
-                                    "videoId": entry.get('id'),
+                                    "id": entry.get('id'),
                                     "title": entry.get('title', 'Unknown'),
                                     "artists": [{"name": entry.get('uploader', entry.get('channel', 'Unknown'))}],
-                                    "duration_seconds": entry.get('duration', 0),
+                                    "duration_seconds": entry.get('duration'),
                                     "thumbnails": [{"url": entry.get('thumbnail')}] if entry.get('thumbnail') else [],
                                 })
                         if tracks:
                             _LOGGER.info("[Playlist] ✓ yt-dlp fallback succeeded: %d tracks", len(tracks))
-                            return tracks
+                            return _normalize_tracks(tracks)
                 except Exception as e:
                     _LOGGER.warning("[Playlist] yt-dlp fallback failed for %s: %s", list_id, e)
 

@@ -29,6 +29,10 @@ class YTMusicUrlText(TextEntity):
         self._attr_unique_id = f"{entry.entry_id}_url"
         self._attr_native_value = ""
 
+    def _resolve_auto_play(self) -> bool:
+        cfg = {**self.entry.data, **(self.entry.options or {})}
+        return bool(cfg.get(CONF_AUTO_PLAY, True))
+
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
@@ -42,6 +46,7 @@ class YTMusicUrlText(TextEntity):
         self._attr_native_value = value or ""
         self.async_write_ha_state()
 
+        self._auto_play = self._resolve_auto_play()
         if not self._auto_play:
             return
 

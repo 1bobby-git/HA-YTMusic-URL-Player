@@ -25,6 +25,45 @@ class _FailingYTMusic:
     def get_playlist(self, _list_id: str, limit=None):
         raise KeyError("playlist response has no contents")
 
+    def get_album(self, _browse_id: str):
+        raise KeyError("album response has no contents")
+
+    def get_watch_playlist(self, *args, **kwargs):
+        raise KeyError("watch playlist response has no contents")
+
+
+class _AlbumYTMusic(_FailingYTMusic):
+    def get_album(self, _browse_id: str):
+        return {
+            "tracks": [
+                {"id": "album-id", "title": "7"},
+                {"title": "missing id"},
+            ]
+        }
+
+
+class _AlbumBrowseYTMusic(_FailingYTMusic):
+    def get_album_browse_id(self, _list_id: str):
+        return "MPRE-browse-id"
+
+    def get_album(self, _browse_id: str):
+        return {
+            "tracks": [
+                {"setVideoId": "browse-set-id", "title": "Browse Track"},
+                {"videoId": "", "title": "missing id"},
+            ]
+        }
+
+
+class _WatchPlaylistYTMusic(_FailingYTMusic):
+    def get_watch_playlist(self, *args, **kwargs):
+        return {
+            "tracks": [
+                {"id": "watch-id", "title": "Watch Track", "artists": [{"name": "A"}]},
+                "not a track",
+            ]
+        }
+
 
 class PlaylistYtDlpFallbackTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -43,6 +82,13 @@ class PlaylistYtDlpFallbackTest(unittest.IsolatedAsyncioTestCase):
             )
         }
         self.captured_options: dict = {}
+        self.extract_entries = [
+            {
+                "id": "bjjs-14horc",
+                "title": "Track 1",
+                "channel": "Artist 1",
+            }
+        ]
 
         homeassistant = types.ModuleType("homeassistant")
         homeassistant_core = types.ModuleType("homeassistant.core")
@@ -72,13 +118,7 @@ class PlaylistYtDlpFallbackTest(unittest.IsolatedAsyncioTestCase):
                 if "iPhone" in user_agent:
                     raise RuntimeError("Unable to recognize tab page")
                 return {
-                    "entries": [
-                        {
-                            "id": "bjjs-14horc",
-                            "title": "Track 1",
-                            "channel": "Artist 1",
-                        }
-                    ]
+                    "entries": test_case.extract_entries
                 }
 
             @property
@@ -115,6 +155,7 @@ class PlaylistYtDlpFallbackTest(unittest.IsolatedAsyncioTestCase):
         sys.modules[MODULE_NAME] = module
         assert spec.loader is not None
         spec.loader.exec_module(module)
+        self.module = module
         self.client_class = module.YTMusicClient
 
     def tearDown(self) -> None:
@@ -143,6 +184,121 @@ class PlaylistYtDlpFallbackTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["bjjs-14horc"], [track["videoId"] for track in tracks])
         self.assertNotIn("http_headers", self.captured_options)
+
+    async def test_album_tracks_are_normalized_and_invalid_tracks_skipped(self) -> None:
+        client = self.client_class(hass=object(), config={})
+        client._yt = _AlbumYTMusic()
+
+        tracks = await client.async_get_playlist_video_ids("MPRE-test-album")
+
+        self.assertEqual(
+            [
+                {
+                    "videoId": "album-id",
+                    "title": "Track 7",
+                    "artists": [],
+                    "thumbnails": [],
+                    "duration_seconds": None,
+                }
+            ],
+            tracks,
+        )
+
+    async def test_album_browse_tracks_are_normalized_and_invalid_tracks_skipped(self) -> None:
+        client = self.client_class(hass=object(), config={})
+        client._yt = _AlbumBrowseYTMusic()
+
+        tracks = await client.async_get_playlist_video_ids("OLAK5uy_test_album")
+
+        self.assertEqual(
+            [
+                {
+                    "videoId": "browse-set-id",
+                    "title": "Browse Track",
+                    "artists": [],
+                    "thumbnails": [],
+                    "duration_seconds": None,
+                }
+            ],
+            tracks,
+        )
+
+    async def test_watch_playlist_tracks_are_normalized_and_invalid_tracks_skipped(self) -> None:
+        client = self.client_class(hass=object(), config={})
+        client._yt = _WatchPlaylistYTMusic()
+
+        tracks = await client.async_get_playlist_video_ids("RD-test", seed_video_id="seed")
+
+        self.assertEqual(
+            [
+                {
+                    "videoId": "watch-id",
+                    "title": "Watch Track",
+                    "artists": [{"name": "A"}],
+                    "thumbnails": [],
+                    "duration_seconds": None,
+                }
+            ],
+            tracks,
+        )
+
+    async def test_pytubefix_fallback_tracks_have_required_structure(self) -> None:
+        class FakePlaylist:
+            def __init__(self, _url: str) -> None:
+                self.video_urls = [
+                    "https://www.youtube.com/watch?v=pytube-id&list=test",
+                    "https://youtu.be/pytube-short",
+                    "https://www.youtube.com/playlist?list=invalid",
+                ]
+
+        self.module.PytubePlaylist = FakePlaylist
+        client = self.client_class(hass=object(), config={})
+        client._yt = _FailingYTMusic()
+
+        tracks = await client.async_get_playlist_video_ids("fallback-list")
+
+        self.assertEqual(
+            [
+                {
+                    "videoId": "pytube-id",
+                    "title": "Track 1",
+                    "artists": [],
+                    "thumbnails": [],
+                    "duration_seconds": None,
+                },
+                {
+                    "videoId": "pytube-short",
+                    "title": "Track 2",
+                    "artists": [],
+                    "thumbnails": [],
+                    "duration_seconds": None,
+                },
+            ],
+            tracks,
+        )
+
+    async def test_yt_dlp_fallback_tracks_are_normalized_and_invalid_tracks_skipped(self) -> None:
+        self.extract_entries = [
+            {"id": "yt-dlp-id", "title": "3", "uploader": "Artist"},
+            {"title": "missing id"},
+        ]
+        client = self.client_class(hass=object(), config={})
+        client._yt = _FailingYTMusic()
+
+        tracks = await client.async_get_playlist_video_ids("fallback-list")
+
+        self.assertEqual(
+            [
+                {
+                    "videoId": "yt-dlp-id",
+                    "title": "Track 3",
+                    "artists": [{"name": "Artist"}],
+                    "thumbnails": [],
+                    "duration_seconds": None,
+                }
+            ],
+            tracks,
+        )
 
 
 if __name__ == "__main__":

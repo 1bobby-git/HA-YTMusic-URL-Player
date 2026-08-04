@@ -17,7 +17,7 @@ class ManifestTest(unittest.TestCase):
     def test_release_refreshes_playlist_extractor_dependencies(self) -> None:
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual("1.9.1", manifest["version"])
+        self.assertEqual("1.9.2", manifest["version"])
         self.assertEqual(["http"], manifest["dependencies"])
         self.assertIn("pytubefix>=10.3.0", manifest["requirements"])
         self.assertIn("yt-dlp>=2026.7.4", manifest["requirements"])
