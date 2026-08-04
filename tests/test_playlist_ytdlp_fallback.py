@@ -36,7 +36,7 @@ class _AlbumYTMusic(_FailingYTMusic):
     def get_album(self, _browse_id: str):
         return {
             "tracks": [
-                {"id": "album-id", "title": "7"},
+                {"id": "album-id", "title": "7", "duration": "3:45"},
                 {"title": "missing id"},
             ]
         }
@@ -198,7 +198,8 @@ class PlaylistYtDlpFallbackTest(unittest.IsolatedAsyncioTestCase):
                     "title": "Track 7",
                     "artists": [],
                     "thumbnails": [],
-                    "duration_seconds": None,
+                    "duration": "3:45",
+                    "duration_seconds": 225,
                 }
             ],
             tracks,

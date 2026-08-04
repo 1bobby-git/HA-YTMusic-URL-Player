@@ -162,13 +162,28 @@ class YTMusicClient:
             if title and title.isdigit() and len(title) <= 3:
                 title = f"Track {title}"
 
-            return {
+            duration = track.get("duration")
+            duration_seconds = track.get("duration_seconds")
+            if duration_seconds is None and isinstance(duration, str):
+                try:
+                    parts = [int(part) for part in duration.split(":")]
+                    if len(parts) == 2:
+                        duration_seconds = parts[0] * 60 + parts[1]
+                    elif len(parts) == 3:
+                        duration_seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+                except ValueError:
+                    pass
+
+            normalized = {
                 "videoId": video_id,
                 "title": title,
                 "artists": track.get("artists", []),
                 "thumbnails": track.get("thumbnails", []),
-                "duration_seconds": track.get("duration_seconds"),
+                "duration_seconds": duration_seconds,
             }
+            if duration is not None:
+                normalized["duration"] = duration
+            return normalized
 
         def _normalize_tracks(tracks: list[dict] | None) -> list[dict]:
             normalized = [_normalize_track(track) for track in (tracks or [])]
