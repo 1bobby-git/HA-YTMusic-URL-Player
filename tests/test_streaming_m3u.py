@@ -38,6 +38,7 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
         self._saved_modules = {
             name: sys.modules.get(name)
             for name in (
+                "aiohttp",
                 "homeassistant",
                 "homeassistant.components",
                 "homeassistant.components.http",
@@ -54,6 +55,27 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
                 MODULE_NAME,
             )
         }
+
+        aiohttp = types.ModuleType("aiohttp")
+
+        class Response:
+            def __init__(
+                self,
+                *,
+                status: int = 200,
+                text: str | None = None,
+                content_type: str | None = None,
+            ) -> None:
+                self.status = status
+                self.text = text
+                self.content_type = content_type
+
+        aiohttp.web = types.SimpleNamespace(
+            Response=Response,
+            Request=object,
+            StreamResponse=object,
+        )
+        aiohttp.ClientSession = object
 
         homeassistant = types.ModuleType("homeassistant")
         components = types.ModuleType("homeassistant.components")
@@ -90,6 +112,7 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
 
         sys.modules.update(
             {
+                "aiohttp": aiohttp,
                 "homeassistant": homeassistant,
                 "homeassistant.components": components,
                 "homeassistant.components.http": http,
