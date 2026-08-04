@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "YouTube Music URL Player",
-        "description": "YouTube Music/YouTube URL을 붙여넣어 선택한 media_player로 자동 재생합니다.\n\n재생 방식은 기기에 따라 자동으로 선택됩니다:\n• Cast 기기: YouTube 앱으로 재생\n• 기타 기기: 스트림 URL 직접 전달 → 프록시 순으로 시도\n\n[인증 (선택, 비공개 재생목록용)]\nChrome DevTools에서 Request Headers를 복사해서 붙여넣기\n비워두면 공개 콘텐츠만 재생 가능\n\n[po_token (선택, 봇 감지 우회용)]\n참고: https://pytubefix.readthedocs.io/en/latest/user/po_token.html",
+        "description": "YouTube Music/YouTube URL을 붙여넣어 선택한 media_player로 자동 재생합니다.\n\n재생 방식은 기기에 따라 자동으로 선택됩니다:\n• Cast 기기: YouTube 앱으로 재생\n• 기타 기기: 스트림 URL 직접 전달 → 프록시 순으로 시도\n\n[인증 (선택, 비공개 재생목록용)]\nChrome DevTools에서 Request Headers를 복사해서 붙여넣기\n비워두면 공개 콘텐츠만 재생 가능\n\n[po_token (선택, 봇 감지 우회용)]",
         "data": {
           "name": "이름",
           "media_player": "기본 재생 대상 (복수 선택 가능)",

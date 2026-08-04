@@ -5,6 +5,12 @@ on:
   schedule:
     - cron: "0 0 * * *"
 jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Playlist regression tests
+        run: python -m unittest discover -s tests -v
   validate-hacs:
     runs-on: ubuntu-latest
     steps:

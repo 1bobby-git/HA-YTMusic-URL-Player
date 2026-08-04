@@ -209,9 +209,6 @@ class YTMusicClient:
                             'extract_flat': True,
                             'quiet': True,
                             'no_warnings': True,
-                            'http_headers': {
-                                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
-                            },
                         }
                         pl_url = f"https://www.youtube.com/playlist?list={list_id}"
 
@@ -359,9 +356,6 @@ class YTMusicClient:
                         'extract_flat': True,  # Don't download, just get info
                         'quiet': True,
                         'no_warnings': True,
-                        'http_headers': {
-                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
-                        },
                     }
                     pl_url = f"https://www.youtube.com/playlist?list={list_id}"
 
