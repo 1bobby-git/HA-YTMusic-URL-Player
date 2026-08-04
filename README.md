@@ -140,7 +140,7 @@ logger:
 
 - `ytmusicapi==1.9.1` - YouTube Music API
 - `pytubefix>=10.3.0` - 스트림 추출 (기본)
-- `yt-dlp>=2024.1.0` - 스트림 추출 (폴백)
+- `yt-dlp>=2026.7.4` - 스트림 추출 (폴백)
 - `pychromecast>=14.0.0` - Cast 기기 통신
 
 ---

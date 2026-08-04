@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "YouTube Music URL Player",
-        "description": "Paste a YouTube Music/YouTube URL to automatically play on selected media_player(s).\n\nPlayback method is automatically selected based on device:\n• Cast devices: Play via YouTube app\n• Other devices: Direct stream URL → Proxy (fallback)\n\n[Auth (optional, for private playlists)]\nCopy Request Headers from Chrome DevTools and paste\nLeave empty for public content only\n\n[po_token (optional, for bot detection bypass)]\nSee: https://pytubefix.readthedocs.io/en/latest/user/po_token.html",
+        "description": "Paste a YouTube Music/YouTube URL to automatically play on selected media_player(s).\n\nPlayback method is automatically selected based on device:\n• Cast devices: Play via YouTube app\n• Other devices: Direct stream URL → Proxy (fallback)\n\n[Auth (optional, for private playlists)]\nCopy Request Headers from Chrome DevTools and paste\nLeave empty for public content only\n\n[po_token (optional, for bot detection bypass)]",
         "data": {
           "name": "Name",
           "media_player": "Default target media_player(s)",
