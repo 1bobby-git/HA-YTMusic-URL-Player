@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows:
+      - Validate
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish HACS release
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check out validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify release target and version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "${current_main}" != "${RELEASE_SHA}" ]]; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "Main advanced; refusing to publish a stale release."
+            exit 0
+          fi
+          version="$(python -c 'import json; print(json.load(open("custom_components/ytmusic_url_player/manifest.json", encoding="utf-8"))["version"])')"
+          tag="v${version}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "Release ${tag} already exists."
+            exit 0
+          fi
+          echo "publish=true" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate local brand assets
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+
+          expected = {"icon.png": (256, 256), "icon@2x.png": (512, 512)}
+          root = Path("custom_components/ytmusic_url_player/brand")
+          for name, size in expected.items():
+              data = (root / name).read_bytes()
+              if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+                  raise SystemExit(f"Invalid PNG: {name}")
+              width, height = struct.unpack(">II", data[16:24])
+              if (width, height) != size:
+                  raise SystemExit(f"Unexpected size for {name}: {width}x{height}")
+          PY
+
+      - name: Build integration archive
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="ytmusic_url_player-${{ steps.release.outputs.tag }}.zip"
+          git archive --format=zip --prefix=custom_components/ytmusic_url_player/ --output="${asset}" "${RELEASE_SHA}:custom_components/ytmusic_url_player"
+          unzip -t "${asset}"
+          echo "asset=${asset}" >> "${GITHUB_ENV}"
+
+      - name: Publish release
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          gh release create "${{ steps.release.outputs.tag }}" \
+            "${asset}#Home Assistant 통합 설치 파일" \
+            --target "${RELEASE_SHA}" \
+            --title "YouTube Music URL Player ${{ steps.release.outputs.tag }}" \
+            --notes "Home Assistant 2026.3 이상에서 로컬 Brands Proxy API가 사용할 icon.png 및 icon@2x.png를 통합 패키지에 포함합니다. 런타임 재생 동작 변경은 없습니다."
