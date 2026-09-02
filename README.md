@@ -1,3 +1,14 @@
+<!-- project-branding:start -->
+<p align="center">
+  <img src="https://raw.githubusercontent.com/1bobby-git/brands/master/custom_integrations/ytmusic_url_player/icon@2x.png" alt="YouTube Music URL Player 로고" width="128">
+</p>
+<p align="center">
+  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/stargazers">
+    <img src="https://img.shields.io/github/stars/1bobby-git/HA-YTMusic-URL-Player?style=flat-square&logo=github&label=Stars" alt="GitHub Stars">
+  </a>
+</p>
+<!-- project-branding:end -->
+
 # YouTube Music URL Player
 
 
