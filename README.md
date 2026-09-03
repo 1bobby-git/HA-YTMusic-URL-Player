@@ -1,6 +1,6 @@
 <!-- project-branding:start -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/1bobby-git/brands/master/custom_integrations/ytmusic_url_player/icon@2x.png" alt="YouTube Music URL Player 로고" width="128">
+  <img src="media/readme-logo.svg" alt="YouTube Music URL Player 가로형 로고" width="480">
 </p>
 <p align="center">
   <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/stargazers">
