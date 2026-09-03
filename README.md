@@ -3,9 +3,11 @@
   <img src="media/readme-logo.svg" alt="YouTube Music URL Player 가로형 로고" width="480">
 </p>
 <p align="center">
-  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/stargazers">
-    <img src="https://img.shields.io/github/stars/1bobby-git/HA-YTMusic-URL-Player?style=flat-square&logo=github&label=Stars" alt="GitHub Stars">
-  </a>
+  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/stargazers"><img src="https://img.shields.io/github/stars/1bobby-git/HA-YTMusic-URL-Player?style=flat-square&logo=github&label=Stars" alt="GitHub Stars"></a>
+  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/releases"><img src="https://img.shields.io/github/v/release/1bobby-git/HA-YTMusic-URL-Player?style=flat-square&label=Release" alt="Latest Release"></a>
+  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/blob/main/custom_components/ytmusic_url_player/manifest.json"><img src="https://img.shields.io/badge/Architecture-independent-0ea5e9?style=flat-square" alt="Architecture independent"></a>
+  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/blob/main/LICENSE"><img src="https://img.shields.io/github/license/1bobby-git/HA-YTMusic-URL-Player?style=flat-square&label=License" alt="License"></a>
+  <a href="https://github.com/1bobby-git/HA-YTMusic-URL-Player/commits/main"><img src="https://img.shields.io/github/last-commit/1bobby-git/HA-YTMusic-URL-Player?style=flat-square&label=Updated" alt="Last Commit"></a>
 </p>
 <!-- project-branding:end -->
 
