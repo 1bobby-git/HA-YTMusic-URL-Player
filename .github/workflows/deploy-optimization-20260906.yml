@@ -56,7 +56,7 @@ jobs:
           PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" tests "$RUNNER_TEMP/optimization-baseline.xml"
       - name: Apply exact source patches and update documentation
         run: python "$RUNNER_TEMP/optimization-deploy.py" apply
-      - name: Update version expectation and model the new aiohttp timeout import
+      - name: Update native version and timeout fixtures and normalize generated markdown
         run: |
           python - <<'PY'
           import ast, hashlib, json, os
@@ -79,8 +79,14 @@ jobs:
               p.write_text(text)
               state['paths'].append(name)
           state['paths'] = sorted(set(state['paths']))
+          for name in state['paths']:
+              if name.endswith('.md'):
+                  p = Path(name)
+                  p.write_text(p.read_text().rstrip()+'\n')
           state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2)+'\n')
           PY
+          git add -N CHANGELOG.md docs/OPTIMIZATION_2026-09-06.md
+          git diff --check
       - name: Test complete patched integration
         run: |
           python -m compileall -q custom_components/ytmusic_url_player
