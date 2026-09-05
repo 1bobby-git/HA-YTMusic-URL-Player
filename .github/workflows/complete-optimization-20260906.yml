@@ -1,0 +1,133 @@
+name: Complete verified optimization release
+"on":
+  push:
+    branches: [release/optimization-20260906]
+    paths: [.github/workflows/complete-optimization-20260906.yml]
+permissions:
+  contents: write
+concurrency:
+  group: deploy-optimization-20260906
+  cancel-in-progress: false
+jobs:
+  validate-and-publish:
+    if: github.repository == '1bobby-git/HA-YTMusic-URL-Player'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Read pinned original publisher
+        uses: actions/checkout@v4
+        with:
+          repository: 1bobby-git/HA-iOS-ANCS
+          ref: d5c58703029ea8cfbff4cfd335c59fc49d3fbe98
+          path: .legacy-helper
+          sparse-checkout: .optimization-release
+          persist-credentials: false
+      - name: Read verified publisher correction
+        uses: actions/checkout@v4
+        with:
+          repository: 1bobby-git/HA-iOS-ANCS
+          ref: a48ba16993ad1603af99a50f2ca19e2b20aeb653
+          path: .release-helper
+          sparse-checkout: .optimization-release
+          persist-credentials: false
+      - name: Read pinned approved patch specification
+        uses: actions/checkout@v4
+        with:
+          ref: c452c84c8f15d2934f41c788cc2b82f2bbe1cbf1
+          path: .release-input
+          sparse-checkout: .github/workflows
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare isolated publisher and exact patch specification
+        run: |
+          cp .legacy-helper/.optimization-release/deploy.py "$RUNNER_TEMP/optimization-deploy.py"
+          cp .legacy-helper/.optimization-release/unittest_report.py "$RUNNER_TEMP/optimization-unittest.py"
+          python .release-helper/.optimization-release/repair_helper.py "$RUNNER_TEMP/optimization-deploy.py"
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          text = Path('.release-input/.github/workflows/deploy-optimization-20260906.yml').read_text()
+          matches = re.findall(r'^        (\{"repository".*\})$', text, re.M)
+          assert len(matches) == 1
+          spec = json.loads(matches[0])
+          assert spec['repository'] == os.environ['GITHUB_REPOSITORY']
+          assert spec['base_version'] == '1.9.3' and spec['candidate_version'] == '1.9.4'
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('PATCH_SPEC=' + json.dumps(spec, ensure_ascii=True) + '\n')
+          PY
+          rm -rf .legacy-helper .release-helper .release-input
+      - name: Check source hashes, versions and branch protections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python "$RUNNER_TEMP/optimization-deploy.py" check
+      - name: Test unchanged baseline
+        run: |
+          python -m compileall -q custom_components/ytmusic_url_player
+          PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" tests "$RUNNER_TEMP/optimization-baseline.xml"
+      - name: Apply exact source patches and update documentation
+        run: python "$RUNNER_TEMP/optimization-deploy.py" apply
+      - name: Align version assertion and aiohttp test double without skipping tests
+        run: |
+          python - <<'PY'
+          import ast, hashlib, json, os
+          from pathlib import Path
+          changes = [
+              ('tests/test_manifest.py', '66a22e3f984de2a3c525b9bf696430614a376c8d', 'self.assertEqual("1.9.3", manifest["version"])', 'self.assertEqual("1.9.4", manifest["version"])'),
+              ('tests/test_streaming_m3u.py', '0641fc76956a990cbfd8e1763ddbd0182dedc5c4', '        aiohttp.ClientSession = object\n', '        aiohttp.ClientSession = object\n        aiohttp.ClientTimeout = types.SimpleNamespace\n'),
+          ]
+          state_path = Path(os.environ['RUNNER_TEMP']) / 'optimization-state.json'
+          state = json.loads(state_path.read_text())
+          for name, expected_sha, old, new in changes:
+              p = Path(name)
+              raw = p.read_bytes()
+              assert hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() == expected_sha, name
+              text = raw.decode()
+              assert text.count(old) == 1, name
+              text = text.replace(old, new)
+              ast.parse(text)
+              p.write_text(text)
+              state['paths'].append(name)
+          state['paths'] = sorted(set(state['paths']))
+          state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n')
+          PY
+      - name: Test complete patched integration
+        run: |
+          python -m compileall -q custom_components/ytmusic_url_player
+          PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" tests "$RUNNER_TEMP/optimization-patched.xml"
+      - name: Validate local brand assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import struct
+          root = Path('custom_components/ytmusic_url_player/brand')
+          for name, size in {'icon.png': (256,256), 'icon@2x.png': (512,512)}.items():
+              data = (root/name).read_bytes()
+              assert data[:8] == b'\x89PNG\r\n\x1a\n' and data[12:16] == b'IHDR', name
+              assert struct.unpack('>II', data[16:24]) == size, name
+          PY
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master
+      - name: Publish verified commit, tag and release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python "$RUNNER_TEMP/optimization-deploy.py" publish
+      - name: Preserve validation and publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimization-validation
+          path: |
+            ${{ runner.temp }}/optimization-baseline.xml
+            ${{ runner.temp }}/optimization-patched.xml
+            ${{ runner.temp }}/optimization-result.json
+          if-no-files-found: error
