@@ -12,9 +12,6 @@ jobs:
   validate-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    env:
-      PATCH_SPEC: >-
-        {"repository":"1bobby-git/HA-YTMusic-URL-Player","branch":"main","base_version":"1.9.3","candidate_version":"1.9.4","summary":["동일 영상의 동시 캐시 미스에서 성공한 추출 결과 재사용; 영상별 잠금은 유휴 시 자동 제거","메타데이터 캐시를 128개로 제한하고 시스템 시각 변경의 TTL 영향 제거","긴 재생을 중단시키는 전체 30초 제한 대신 연결/수신 정체 30초 제한","이미 전송을 시작한 스트림에서 오류가 나면 새 응답·추출을 반복하지 않음","추출기 선택·재생목록·서비스·엔티티·인증 정책 및 라이브러리 버전은 변경하지 않음"],"changes":[{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"from typing import Any, Optional\n","new":"from typing import Any, Optional\nfrom weakref import WeakValueDictionary\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"from aiohttp import web, ClientSession\n","new":"from aiohttp import web, ClientSession, ClientTimeout\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"        self._cache: dict[str, dict[str, Any]] = {}\n","new":"        self._cache: dict[str, dict[str, Any]] = {}\n        self._metadata_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"    async def async_get_metadata(self, video_id: str) -> VideoMetadata:\n        \"\"\"영상의 전체 메타데이터 반환 (썸네일, 제목 등 포함).\"\"\"\n","new":"    async def async_get_metadata(self, video_id: str) -> VideoMetadata:\n        \"\"\"Share cached extraction across simultaneous requests for a video.\"\"\"\n        lock = self._metadata_locks.get(video_id)\n        if lock is None:\n            lock = asyncio.Lock()\n            self._metadata_locks[video_id] = lock\n        async with lock:\n            return await self._async_get_metadata_locked(video_id)\n\n    async def _async_get_metadata_locked(self, video_id: str) -> VideoMetadata:\n        \"\"\"영상의 전체 메타데이터 반환 (썸네일, 제목 등 포함).\"\"\"\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"        now = time.time()\n        cached = self._cache.get(video_id)\n","new":"        now = time.monotonic()\n        cached = self._cache.get(video_id)\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"        self._cache[video_id] = {\n            \"metadata\": metadata,\n            \"expires\": now + STREAM_CACHE_TTL_SECONDS,\n        }\n        return metadata\n","new":"        self._cache[video_id] = {\n            \"metadata\": metadata,\n            \"expires\": now + STREAM_CACHE_TTL_SECONDS,\n        }\n        # Retain a bounded FIFO cache instead of every video ever played.\n        while len(self._cache) > 128:\n            self._cache.pop(next(iter(self._cache)))\n        return metadata\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"                async with self._session.get(audio_url, headers=req_headers, timeout=30) as resp:\n","new":"                async with self._session.get(\n                    audio_url,\n                    headers=req_headers,\n                    timeout=ClientTimeout(\n                        total=None, connect=30, sock_connect=30, sock_read=30\n                    ),\n                ) as resp:\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"        for attempt in range(max_retries):\n            try:\n","new":"        for attempt in range(max_retries):\n            stream_resp: web.StreamResponse | None = None\n            try:\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"            except Exception as err:\n                _LOGGER.error(\"[Proxy] ✗ Stream failed for %s: %s\", video_id, err)\n                if attempt < max_retries - 1:\n","new":"            except Exception as err:\n                _LOGGER.error(\"[Proxy] ✗ Stream failed for %s: %s\", video_id, err)\n                if stream_resp is not None and stream_resp.prepared:\n                    # A second HTTP response cannot be sent after headers/body.\n                    # Let aiohttp close the failed stream; do not fetch it again.\n                    raise\n                if attempt < max_retries - 1:\n"},{"path":"custom_components/ytmusic_url_player/streaming.py","git_blob_sha1":"9a4683b6cef6f8af5708dcee073b8d4322f60689","old":"        try:\n            return await extractor.async_proxy(request, video_id)\n        except Exception as err:\n            _LOGGER.exception(\"Stream failed for %s: %s\", video_id, err)\n            return web.Response(status=500, text=\"Stream failed\")\n","new":"        # Pre-header failures already return an error response in async_proxy.\n        # Post-header failures must propagate so aiohttp closes the connection.\n        return await extractor.async_proxy(request, video_id)\n"},{"path":"custom_components/ytmusic_url_player/manifest.json","git_blob_sha1":"b53a16e2568f5242bca3b2d9fffda6342b6eb7b5","old":"\"version\": \"1.9.3\"","new":"\"version\": \"1.9.4\""}]}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,11 +24,25 @@ jobs:
           path: .release-helper
           sparse-checkout: .optimization-release
           persist-credentials: false
-      - name: Keep helpers outside release source
+      - name: Load original approved patches and fix draft lookup in isolated helper
         run: |
-          cp .release-helper/.optimization-release/deploy.py "$RUNNER_TEMP/optimization-deploy.py"
-          cp .release-helper/.optimization-release/unittest_report.py "$RUNNER_TEMP/optimization-unittest.py"
-          rm -rf .release-helper
+          python - <<'PY'
+          import json, os, re, shutil, subprocess
+          from pathlib import Path
+          original = subprocess.check_output(['git', 'show', 'c452c84c8f15d2934f41c788cc2b82f2bbe1cbf1:.github/workflows/deploy-optimization-20260906.yml'], text=True)
+          spec = json.loads(re.search(r'PATCH_SPEC: >-\s+(\{[^\n]+\})', original).group(1))
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('PATCH_SPEC=' + json.dumps(spec, ensure_ascii=False) + '\n')
+          temp = Path(os.environ['RUNNER_TEMP'])
+          source = Path('.release-helper/.optimization-release')
+          text = (source/'deploy.py').read_text()
+          old = '    release = api("releases/tags/" + state["tag"])'
+          assert text.count(old) == 2
+          text = text.replace(old, '    release = next(r for r in api("releases?per_page=100") if r["tag_name"] == state["tag"])', 1)
+          (temp/'optimization-deploy.py').write_text(text)
+          shutil.copyfile(source/'unittest_report.py', temp/'optimization-unittest.py')
+          shutil.rmtree('.release-helper')
+          PY
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -45,6 +56,31 @@ jobs:
           PYTHONPATH="$PWD" python "$RUNNER_TEMP/optimization-unittest.py" tests "$RUNNER_TEMP/optimization-baseline.xml"
       - name: Apply exact source patches and update documentation
         run: python "$RUNNER_TEMP/optimization-deploy.py" apply
+      - name: Update version expectation and model the new aiohttp timeout import
+        run: |
+          python - <<'PY'
+          import ast, hashlib, json, os
+          from pathlib import Path
+          changes = {
+              'tests/test_manifest.py': ('66a22e3f984de2a3c525b9bf696430614a376c8d', [('self.assertEqual("1.9.3", manifest["version"])', 'self.assertEqual("1.9.4", manifest["version"])')]),
+              'tests/test_streaming_m3u.py': ('0641fc76956a990cbfd8e1763ddbd0182dedc5c4', [('        aiohttp.ClientSession = object\n', '        aiohttp.ClientSession = object\n        aiohttp.ClientTimeout = types.SimpleNamespace\n')]),
+          }
+          state_path = Path(os.environ['RUNNER_TEMP'])/'optimization-state.json'
+          state = json.loads(state_path.read_text())
+          for name, (expected, replacements) in changes.items():
+              p = Path(name)
+              raw = p.read_bytes()
+              assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest() == expected
+              text = raw.decode()
+              for old, new in replacements:
+                  assert text.count(old) == 1
+                  text = text.replace(old, new)
+              ast.parse(text)
+              p.write_text(text)
+              state['paths'].append(name)
+          state['paths'] = sorted(set(state['paths']))
+          state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2)+'\n')
+          PY
       - name: Test complete patched integration
         run: |
           python -m compileall -q custom_components/ytmusic_url_player
