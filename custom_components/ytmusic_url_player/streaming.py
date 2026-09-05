@@ -5,8 +5,9 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
+from weakref import WeakValueDictionary
 
-from aiohttp import web, ClientSession
+from aiohttp import web, ClientSession, ClientTimeout
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.network import get_url
@@ -51,6 +52,7 @@ class StreamExtractor:
         self._config = config
         self._session = session
         self._cache: dict[str, dict[str, Any]] = {}
+        self._metadata_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         # po_token for bot detection bypass
         self._po_token = config.get(CONF_PO_TOKEN, "").strip() or None
         self._visitor_data = config.get(CONF_VISITOR_DATA, "").strip() or None
@@ -63,10 +65,19 @@ class StreamExtractor:
         return metadata.stream_url, metadata.mime_type, {"User-Agent": "Mozilla/5.0"}
 
     async def async_get_metadata(self, video_id: str) -> VideoMetadata:
+        """Share cached extraction across simultaneous requests for a video."""
+        lock = self._metadata_locks.get(video_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._metadata_locks[video_id] = lock
+        async with lock:
+            return await self._async_get_metadata_locked(video_id)
+
+    async def _async_get_metadata_locked(self, video_id: str) -> VideoMetadata:
         """영상의 전체 메타데이터 반환 (썸네일, 제목 등 포함)."""
         _LOGGER.debug("[Stream] Getting metadata for video_id=%s", video_id)
 
-        now = time.time()
+        now = time.monotonic()
         cached = self._cache.get(video_id)
         if cached and cached.get("expires", 0) > now:
             _LOGGER.debug("[Stream] Using cached metadata for %s", video_id)
@@ -255,6 +266,9 @@ class StreamExtractor:
             "metadata": metadata,
             "expires": now + STREAM_CACHE_TTL_SECONDS,
         }
+        # Retain a bounded FIFO cache instead of every video ever played.
+        while len(self._cache) > 128:
+            self._cache.pop(next(iter(self._cache)))
         return metadata
 
     def _invalidate_cache(self, video_id: str) -> None:
@@ -269,6 +283,7 @@ class StreamExtractor:
         # Retry logic for 403 errors (expired/blocked stream URLs)
         max_retries = 2
         for attempt in range(max_retries):
+            stream_resp: web.StreamResponse | None = None
             try:
                 audio_url, mime, base_headers = await self.async_get_audio(video_id)
                 _LOGGER.info("[Proxy] Got audio URL (length=%d), mime=%s", len(audio_url), mime)
@@ -285,7 +300,13 @@ class StreamExtractor:
             _LOGGER.info("[Proxy] Fetching audio stream from YouTube (attempt %d/%d)...", attempt + 1, max_retries)
 
             try:
-                async with self._session.get(audio_url, headers=req_headers, timeout=30) as resp:
+                async with self._session.get(
+                    audio_url,
+                    headers=req_headers,
+                    timeout=ClientTimeout(
+                        total=None, connect=30, sock_connect=30, sock_read=30
+                    ),
+                ) as resp:
                     _LOGGER.info("[Proxy] YouTube response: status=%d, content-length=%s",
                                  resp.status, resp.headers.get("Content-Length", "unknown"))
 
@@ -328,6 +349,10 @@ class StreamExtractor:
 
             except Exception as err:
                 _LOGGER.error("[Proxy] ✗ Stream failed for %s: %s", video_id, err)
+                if stream_resp is not None and stream_resp.prepared:
+                    # A second HTTP response cannot be sent after headers/body.
+                    # Let aiohttp close the failed stream; do not fetch it again.
+                    raise
                 if attempt < max_retries - 1:
                     _LOGGER.warning("[Proxy] Retrying after error...")
                     self._invalidate_cache(video_id)
@@ -361,11 +386,9 @@ class YTMusicStreamView(HomeAssistantView):
             _LOGGER.error("No StreamExtractor available")
             return web.Response(status=500, text="Stream extractor not available")
 
-        try:
-            return await extractor.async_proxy(request, video_id)
-        except Exception as err:
-            _LOGGER.exception("Stream failed for %s: %s", video_id, err)
-            return web.Response(status=500, text="Stream failed")
+        # Pre-header failures already return an error response in async_proxy.
+        # Post-header failures must propagate so aiohttp closes the connection.
+        return await extractor.async_proxy(request, video_id)
 
 class YTMusicM3UView(HomeAssistantView):
     url = f"/api/{DOMAIN}/{API_M3U_PATH}/{{list_id}}.m3u"

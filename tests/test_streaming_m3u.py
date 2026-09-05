@@ -76,6 +76,7 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
             StreamResponse=object,
         )
         aiohttp.ClientSession = object
+        aiohttp.ClientTimeout = types.SimpleNamespace
 
         homeassistant = types.ModuleType("homeassistant")
         components = types.ModuleType("homeassistant.components")
