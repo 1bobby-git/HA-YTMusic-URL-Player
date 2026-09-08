@@ -171,120 +171,125 @@ class QueueManager:
             asyncio.create_task(self._play_next(entity_id))
 
     async def _play_next(self, entity_id: str) -> None:
-        """Play the next track in the queue."""
+        """Play the next track while holding the queue lock once."""
         async with self._lock:
-            queue = self._queues.get(entity_id)
-            if not queue or not queue.is_active:
-                return
+            if await self._advance_queue(entity_id):
+                await self._play_current(entity_id)
 
-            playback_mode = self._get_playback_mode()
+    async def _advance_queue(self, entity_id: str) -> bool:
+        """Advance a queue; the caller must already hold the lock."""
+        queue = self._queues.get(entity_id)
+        if not queue or not queue.is_active:
+            return False
 
-            # 모드 변경 감지 및 트랙 리스트 재구성
-            if playback_mode != queue.current_mode:
-                _LOGGER.info(
-                    "[Queue] Mode changed: %s -> %s, restructuring playlist",
-                    queue.current_mode, playback_mode
-                )
-                current_track = queue.tracks[queue.current_index] if queue.current_index < len(queue.tracks) else None
-                current_video_id = current_track.get("videoId") if current_track else None
+        playback_mode = self._get_playback_mode()
 
-                if playback_mode == PLAYBACK_MODE_SHUFFLE:
-                    # → 랜덤재생: 현재 트랙 제외하고 나머지 셔플
-                    remaining = [t for t in queue.original_tracks if t.get("videoId") != current_video_id]
-                    random.shuffle(remaining)
-                    # 현재 트랙을 맨 앞에 두고 나머지 셔플된 트랙 추가
-                    if current_track:
-                        queue.tracks = [current_track] + remaining
-                        queue.current_index = 0
-                    else:
-                        queue.tracks = remaining
-                        queue.current_index = 0
-                    _LOGGER.info("[Queue] Switched to shuffle: %d tracks", len(queue.tracks))
+        # 모드 변경 감지 및 트랙 리스트 재구성
+        if playback_mode != queue.current_mode:
+            _LOGGER.info(
+                "[Queue] Mode changed: %s -> %s, restructuring playlist",
+                queue.current_mode, playback_mode
+            )
+            current_track = queue.tracks[queue.current_index] if queue.current_index < len(queue.tracks) else None
+            current_video_id = current_track.get("videoId") if current_track else None
 
-                elif playback_mode == PLAYBACK_MODE_SEQUENTIAL:
-                    # → 순차재생: 원본 순서로 복원, 현재 트랙 위치 찾기
-                    queue.tracks = list(queue.original_tracks)
-                    if current_video_id:
-                        for i, t in enumerate(queue.tracks):
-                            if t.get("videoId") == current_video_id:
-                                queue.current_index = i
-                                break
-                    _LOGGER.info("[Queue] Switched to sequential: index=%d", queue.current_index)
-
-                # ONCE 모드는 리스트 변경 불필요 (다음 곡 끝나면 종료)
-                queue.current_mode = playback_mode
-
-            # 다음 트랙으로 이동
-            queue.current_index += 1
-
-            if queue.current_index >= len(queue.tracks):
-                # 재생 모드에 따른 동작
-                if playback_mode == PLAYBACK_MODE_ONCE:
-                    # 1회재생: 재생 종료
-                    _LOGGER.info("[Queue] Playlist finished for %s (mode=once)", entity_id)
-                    await self._stop_queue(entity_id)
-                    return
-
-                elif playback_mode == PLAYBACK_MODE_SHUFFLE:
-                    # 랜덤재생: 다시 셔플하고 처음부터
-                    _LOGGER.info("[Queue] Re-shuffling playlist for %s", entity_id)
-                    queue.tracks = list(queue.original_tracks)
-                    random.shuffle(queue.tracks)
+            if playback_mode == PLAYBACK_MODE_SHUFFLE:
+                # → 랜덤재생: 현재 트랙 제외하고 나머지 셔플
+                remaining = [t for t in queue.original_tracks if t.get("videoId") != current_video_id]
+                random.shuffle(remaining)
+                # 현재 트랙을 맨 앞에 두고 나머지 셔플된 트랙 추가
+                if current_track:
+                    queue.tracks = [current_track] + remaining
                     queue.current_index = 0
-
-                else:  # PLAYBACK_MODE_SEQUENTIAL
-                    # 순차반복: 처음부터 다시
-                    _LOGGER.info("[Queue] Looping playlist for %s (mode=sequential)", entity_id)
+                else:
+                    queue.tracks = remaining
                     queue.current_index = 0
+                _LOGGER.info("[Queue] Switched to shuffle: %d tracks", len(queue.tracks))
 
-            await self._play_current(entity_id)
+            elif playback_mode == PLAYBACK_MODE_SEQUENTIAL:
+                # → 순차재생: 원본 순서로 복원, 현재 트랙 위치 찾기
+                queue.tracks = list(queue.original_tracks)
+                if current_video_id:
+                    for i, t in enumerate(queue.tracks):
+                        if t.get("videoId") == current_video_id:
+                            queue.current_index = i
+                            break
+                _LOGGER.info("[Queue] Switched to sequential: index=%d", queue.current_index)
+
+            # ONCE 모드는 리스트 변경 불필요 (다음 곡 끝나면 종료)
+            queue.current_mode = playback_mode
+
+        # 다음 트랙으로 이동
+        queue.current_index += 1
+
+        if queue.current_index >= len(queue.tracks):
+            # 재생 모드에 따른 동작
+            if playback_mode == PLAYBACK_MODE_ONCE:
+                # 1회재생: 재생 종료
+                _LOGGER.info("[Queue] Playlist finished for %s (mode=once)", entity_id)
+                await self._stop_queue(entity_id)
+                return False
+
+            elif playback_mode == PLAYBACK_MODE_SHUFFLE:
+                # 랜덤재생: 다시 셔플하고 처음부터
+                _LOGGER.info("[Queue] Re-shuffling playlist for %s", entity_id)
+                queue.tracks = list(queue.original_tracks)
+                random.shuffle(queue.tracks)
+                queue.current_index = 0
+
+            else:  # PLAYBACK_MODE_SEQUENTIAL
+                # 순차반복: 처음부터 다시
+                _LOGGER.info("[Queue] Looping playlist for %s (mode=sequential)", entity_id)
+                queue.current_index = 0
+
+        return True
 
     async def _play_current(self, entity_id: str) -> None:
-        """Play the current track in the queue."""
+        """Bound playback attempts without reacquiring the queue lock."""
         queue = self._queues.get(entity_id)
         if not queue or not queue.is_active:
             return
 
-        if queue.current_index >= len(queue.tracks):
-            _LOGGER.warning("[Queue] Index out of range for %s", entity_id)
-            return
+        for _ in range(len(queue.tracks)):
+            if not 0 <= queue.current_index < len(queue.tracks):
+                _LOGGER.warning("[Queue] Index out of range for %s", entity_id)
+                break
 
-        track = queue.tracks[queue.current_index]
-        video_id = track.get("videoId") or track.get("setVideoId")
-        title = track.get("title", "Unknown")
+            track = queue.tracks[queue.current_index]
+            video_id = track.get("videoId") or track.get("setVideoId")
+            title = track.get("title", "Unknown")
 
-        # video_id 검증 추가
-        if not video_id:
-            _LOGGER.warning(
-                "[Queue] Track %d/%d has no videoId, skipping: %s",
-                queue.current_index + 1, len(queue.tracks), title
-            )
-            await self._play_next(entity_id)
-            return
+            if not video_id:
+                _LOGGER.warning(
+                    "[Queue] Track %d/%d has no videoId, skipping: %s",
+                    queue.current_index + 1, len(queue.tracks), title,
+                )
+            elif self._play_callback:
+                _LOGGER.info(
+                    "[Queue] Playing track %d/%d on %s: %s (%s)",
+                    queue.current_index + 1, len(queue.tracks),
+                    entity_id, title, video_id,
+                )
+                try:
+                    await self._play_callback(entity_id, video_id, track)
+                except Exception as err:
+                    _LOGGER.error("[Queue] Failed to play track: %s", err)
+                else:
+                    next_idx = queue.current_index + 1
+                    if next_idx < len(queue.tracks):
+                        next_track = queue.tracks[next_idx]
+                        next_video_id = next_track.get("videoId") or next_track.get("setVideoId")
+                        if next_video_id:
+                            asyncio.create_task(self._prefetch_metadata(next_video_id))
+                    return
+            else:
+                return
 
-        _LOGGER.info(
-            "[Queue] Playing track %d/%d on %s: %s (%s)",
-            queue.current_index + 1, len(queue.tracks),
-            entity_id, title, video_id
-        )
+            if not await self._advance_queue(entity_id):
+                return
 
-        if self._play_callback and video_id:
-            try:
-                await self._play_callback(entity_id, video_id, track)
-
-                # After current track starts playing, pre-fetch next track metadata
-                next_idx = queue.current_index + 1
-                if next_idx < len(queue.tracks):
-                    next_track = queue.tracks[next_idx]
-                    next_video_id = next_track.get("videoId") or next_track.get("setVideoId")
-                    if next_video_id:
-                        # Pre-fetch in background - don't await, just fire-and-forget
-                        asyncio.create_task(self._prefetch_metadata(next_video_id))
-
-            except Exception as e:
-                _LOGGER.error("[Queue] Failed to play track: %s", e)
-                # Try next track on error
-                await self._play_next(entity_id)
+        _LOGGER.warning("[Queue] No playable tracks remain for %s", entity_id)
+        await self._stop_queue(entity_id)
 
     async def _prefetch_metadata(self, video_id: str) -> None:
         """Pre-fetch next track metadata to warm cache."""

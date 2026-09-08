@@ -90,4 +90,4 @@ jobs:
             "${asset}#Home Assistant 통합 설치 파일" \
             --target "${RELEASE_SHA}" \
             --title "YouTube Music URL Player ${{ steps.release.outputs.tag }}" \
-            --notes "Home Assistant 2026.3 이상에서 로컬 Brands Proxy API가 사용할 icon.png 및 icon@2x.png를 통합 패키지에 포함합니다. 런타임 재생 동작 변경은 없습니다."
+            --generate-notes
