@@ -80,6 +80,35 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.manager._play_next("media_player.test"), timeout=0.2)
         self.assertEqual("last", self.play.await_args.args[1])
 
+    async def test_spawn_retains_task_reference_until_done(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _worker() -> None:
+            started.set()
+            await release.wait()
+
+        self.manager._spawn(_worker())
+        await asyncio.wait_for(started.wait(), timeout=0.2)
+        # A strong reference must be held while the task is in flight.
+        self.assertEqual(1, len(self.manager._background_tasks))
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # The done callback must drop the reference once finished.
+        self.assertEqual(0, len(self.manager._background_tasks))
+
+    async def test_clear_all_cancels_pending_background_tasks(self) -> None:
+        async def _worker() -> None:
+            await asyncio.Event().wait()
+
+        self.manager._spawn(_worker())
+        task = next(iter(self.manager._background_tasks))
+        self.manager.clear_all()
+        self.assertEqual(0, len(self.manager._background_tasks))
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,16 @@ class QueueManager:
         self._queues: dict[str, PlaybackQueue] = {}
         self._play_callback: Callable | None = None
         self._lock = asyncio.Lock()
+        # Keep strong references to fire-and-forget tasks; the event loop only
+        # holds a weak reference, so untracked tasks may be garbage-collected
+        # mid-flight (see asyncio.create_task docs).
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _spawn(self, coro) -> None:
+        """Schedule a background task and retain a strong reference to it."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def set_entry_id(self, entry_id: str) -> None:
         """Set the entry_id for accessing playback mode."""
@@ -168,7 +178,7 @@ class QueueManager:
         # Track finished: was playing, now idle
         if old_state_str == STATE_PLAYING and new_state_str == STATE_IDLE:
             _LOGGER.info("[Queue] Track finished on %s, playing next...", entity_id)
-            asyncio.create_task(self._play_next(entity_id))
+            self._spawn(self._play_next(entity_id))
 
     async def _play_next(self, entity_id: str) -> None:
         """Play the next track while holding the queue lock once."""
@@ -280,7 +290,7 @@ class QueueManager:
                         next_track = queue.tracks[next_idx]
                         next_video_id = next_track.get("videoId") or next_track.get("setVideoId")
                         if next_video_id:
-                            asyncio.create_task(self._prefetch_metadata(next_video_id))
+                            self._spawn(self._prefetch_metadata(next_video_id))
                     return
             else:
                 return
@@ -329,4 +339,9 @@ class QueueManager:
             queue = self._queues.pop(entity_id, None)
             if queue and queue.unsubscribe:
                 queue.unsubscribe()
+        # Cancel any in-flight play-next / prefetch tasks so they do not
+        # outlive the config entry on unload or reload.
+        for task in list(self._background_tasks):
+            task.cancel()
+        self._background_tasks.clear()
         _LOGGER.info("[Queue] Cleared all queues")
