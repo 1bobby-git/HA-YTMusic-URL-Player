@@ -136,6 +136,7 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
         assert spec.loader is not None
         spec.loader.exec_module(module)
         self.view_class = module.YTMusicM3UView
+        self.stream_view_class = module.YTMusicStreamView
 
     def tearDown(self) -> None:
         for name, original in self._saved_modules.items():
@@ -151,6 +152,31 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
         response = await self.view_class(hass).get(_Request(), "playlist-id")
 
         self.assertIn("#EXTINF:225,Artist - Timed Track", response.text)
+
+    async def test_m3u_rejects_malformed_list_id(self) -> None:
+        hass = types.SimpleNamespace(
+            data={"ytmusic_url_player": {"entry": {"ytmusic": _Client()}}}
+        )
+        request = types.SimpleNamespace(query={}, remote="127.0.0.1")
+        response = await self.view_class(hass).get(request, "../../secret")
+
+        self.assertEqual(400, response.status)
+
+    async def test_m3u_rejects_malformed_seed_video_id(self) -> None:
+        hass = types.SimpleNamespace(
+            data={"ytmusic_url_player": {"entry": {"ytmusic": _Client()}}}
+        )
+        request = types.SimpleNamespace(query={"v": "bad id!"}, remote="127.0.0.1")
+        response = await self.view_class(hass).get(request, "valid-list")
+
+        self.assertEqual(400, response.status)
+
+    async def test_stream_view_rejects_malformed_video_id(self) -> None:
+        hass = types.SimpleNamespace(data={"ytmusic_url_player": {}})
+        request = types.SimpleNamespace(remote="127.0.0.1")
+        response = await self.stream_view_class(hass).get(request, "a/b")
+
+        self.assertEqual(400, response.status)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -33,6 +34,12 @@ from .const import (
 from .ytmusic_client import YTMusicClient
 
 _LOGGER = logging.getLogger(__name__)
+
+# YouTube video IDs and playlist/browse IDs are restricted to an unpadded
+# base64url alphabet. These endpoints are unauthenticated, so reject anything
+# outside that alphabet before it reaches a YouTube request or the executor.
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_LIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 @dataclass
@@ -381,6 +388,10 @@ class YTMusicStreamView(HomeAssistantView):
         return None
 
     async def get(self, request: web.Request, video_id: str) -> web.StreamResponse:
+        if not _VIDEO_ID_RE.match(video_id):
+            _LOGGER.warning("[Proxy] Rejected malformed video_id from %s", request.remote)
+            return web.Response(status=400, text="Invalid video id")
+
         extractor = self._get_extractor()
         if extractor is None:
             _LOGGER.error("No StreamExtractor available")
@@ -409,7 +420,14 @@ class YTMusicM3UView(HomeAssistantView):
         return None
 
     async def get(self, request: web.Request, list_id: str) -> web.Response:
+        if not _LIST_ID_RE.match(list_id):
+            _LOGGER.warning("[M3U] Rejected malformed list_id from %s", request.remote)
+            return web.Response(status=400, text="Invalid playlist id")
+
         seed_video_id = request.query.get("v")
+        if seed_video_id is not None and not _VIDEO_ID_RE.match(seed_video_id):
+            _LOGGER.warning("[M3U] Rejected malformed seed video id from %s", request.remote)
+            return web.Response(status=400, text="Invalid seed video id")
 
         client = self._get_client()
         if client is None:
