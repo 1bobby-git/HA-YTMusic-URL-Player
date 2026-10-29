@@ -29,6 +29,7 @@ from .cast_manager import CastManager
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_PLAY_URL = "play_url"
+SERVICE_STOP = "stop"
 
 
 def _get_domain_data_item(hass: HomeAssistant, key: str):
@@ -177,6 +178,9 @@ async def _play_on_device(
     base_url = _get_base_url(hass)
     media_url = f"{base_url}/api/{DOMAIN}/{API_STREAM_PATH}/{video_id}"
     _LOGGER.info("[Play] Proxy URL: %s", media_url[:80])
+    if extractor:
+        # The player fetches this URL without Home Assistant credentials.
+        extractor.grant_stream(video_id)
 
     # Call media_player.play_media (v1.6 style)
     service_data = {
@@ -205,6 +209,29 @@ async def _play_on_device(
         return False
 
 
+def _resolve_targets(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    target_media_player: Optional[str | list[str]] = None,
+) -> list[str]:
+    """Service target, else the select override, else the configured default."""
+    if target_media_player:
+        if isinstance(target_media_player, str):
+            return [target_media_player]
+        return list(target_media_player)
+
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    override = store.get(DATA_TARGET_OVERRIDE)
+    if override:
+        return [override] if isinstance(override, str) else list(override)
+
+    cfg = {**entry.data, **(entry.options or {})}
+    configured = cfg.get(CONF_MEDIA_PLAYER)
+    if configured:
+        return [configured] if isinstance(configured, str) else list(configured)
+    return []
+
+
 async def async_play_url(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -215,26 +242,8 @@ async def async_play_url(
     _LOGGER.info("=" * 60)
     _LOGGER.info("[Service] play_url: %s", url)
 
-    cfg = {**entry.data, **(entry.options or {})}
-    configured = cfg.get(CONF_MEDIA_PLAYER)
-
     # Determine target(s)
-    targets = []
-    if target_media_player:
-        if isinstance(target_media_player, str):
-            targets = [target_media_player]
-        else:
-            targets = list(target_media_player)
-
-    if not targets:
-        store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-        override = store.get(DATA_TARGET_OVERRIDE)
-        if override:
-            targets = [override] if isinstance(override, str) else list(override)
-
-    if not targets:
-        if configured:
-            targets = [configured] if isinstance(configured, str) else list(configured)
+    targets = _resolve_targets(hass, entry, target_media_player)
 
     if not targets:
         _LOGGER.error("[Service] No target media_player")
@@ -308,6 +317,11 @@ async def async_play_url(
     if not video_id:
         raise ValueError("No video_id available")
 
+    # A single track replaces any playlist running on the same player.
+    if queue_manager:
+        for target in targets:
+            await queue_manager.stop_playlist(target)
+
     # Play on all targets in parallel
     async def _play_target(target: str) -> bool:
         try:
@@ -342,27 +356,70 @@ SERVICE_SCHEMA = vol.Schema(
     }
 )
 
+STOP_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_MEDIA_PLAYER): _entity_or_entities,
+    }
+)
+
+
+async def async_stop(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    target_media_player: Optional[str | list[str]] = None,
+) -> None:
+    """End the playlist queue on the targets and stop their playback."""
+    targets = _resolve_targets(hass, entry, target_media_player)
+    if not targets:
+        raise ValueError("No target media_player configured")
+
+    queue_manager = _get_queue_manager(hass)
+    if queue_manager:
+        for target in targets:
+            await queue_manager.stop_playlist(target)
+
+    try:
+        await hass.services.async_call(
+            "media_player",
+            "media_stop",
+            {"entity_id": targets},
+            blocking=True,
+        )
+    except Exception as err:
+        # The queue is already ended; some players cannot stop, only pause.
+        _LOGGER.warning("[Service] media_stop failed on %s: %s", targets, err)
+
 
 def async_register_services(hass: HomeAssistant) -> None:
-    """Register the play_url service."""
-    if hass.services.has_service(DOMAIN, SERVICE_PLAY_URL):
-        return
+    """Register the play_url and stop services."""
+    if not hass.services.has_service(DOMAIN, SERVICE_PLAY_URL):
 
-    async def _handle(call: ServiceCall) -> None:
-        url = call.data["url"]
-        target = call.data.get(CONF_MEDIA_PLAYER)
+        async def _handle(call: ServiceCall) -> None:
+            url = call.data["url"]
+            target = call.data.get(CONF_MEDIA_PLAYER)
 
-        entries = hass.config_entries.async_entries(DOMAIN)
-        if not entries:
-            raise RuntimeError("No config entry found")
+            entries = hass.config_entries.async_entries(DOMAIN)
+            if not entries:
+                raise RuntimeError("No config entry found")
 
-        entry = entries[0]
-        await async_play_url(hass, entry, url, target)
+            entry = entries[0]
+            await async_play_url(hass, entry, url, target)
 
-    hass.services.async_register(DOMAIN, SERVICE_PLAY_URL, _handle, schema=SERVICE_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_PLAY_URL, _handle, schema=SERVICE_SCHEMA)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_STOP):
+
+        async def _handle_stop(call: ServiceCall) -> None:
+            entries = hass.config_entries.async_entries(DOMAIN)
+            if not entries:
+                raise RuntimeError("No config entry found")
+            await async_stop(hass, entries[0], call.data.get(CONF_MEDIA_PLAYER))
+
+        hass.services.async_register(DOMAIN, SERVICE_STOP, _handle_stop, schema=STOP_SCHEMA)
 
 
 def async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister domain services if present."""
-    if hass.services.has_service(DOMAIN, SERVICE_PLAY_URL):
-        hass.services.async_remove(DOMAIN, SERVICE_PLAY_URL)
+    for service in (SERVICE_PLAY_URL, SERVICE_STOP):
+        if hass.services.has_service(DOMAIN, service):
+            hass.services.async_remove(DOMAIN, service)

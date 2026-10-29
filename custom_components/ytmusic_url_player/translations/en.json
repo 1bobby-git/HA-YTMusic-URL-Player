@@ -3,14 +3,18 @@
     "step": {
       "user": {
         "title": "YouTube Music URL Player",
-        "description": "Paste a YouTube Music/YouTube URL to automatically play on selected media_player(s).\n\nPlayback method is automatically selected based on device:\n• Cast devices: Play via YouTube app\n• Other devices: Direct stream URL → Proxy (fallback)\n\n[Auth (optional, for private playlists)]\nCopy Request Headers from Chrome DevTools and paste\nLeave empty for public content only\n\n[po_token (optional, for bot detection bypass)]",
+        "description": "Paste a YouTube Music/YouTube URL to automatically play on selected media_player(s).\n\nPlayback method is automatically selected based on device:\n• Cast devices with a screen: Play via YouTube app\n• Other devices: Stream through Home Assistant\n\n[Auth (optional, for private playlists)]\nCopy Request Headers from Chrome DevTools and paste\nLeave empty for public content only\n\n[po_token and visitor_data (optional)]\nWhen both are set, the pytubefix fallback extractor uses them to get past bot detection.",
         "data": {
           "name": "Name",
           "media_player": "Default target media_player(s)",
           "auth_file": "Auth (paste Request Headers)",
           "auto_play": "Auto-play when URL is set",
           "po_token": "po_token (optional)",
-          "visitor_data": "visitor_data (optional)"
+          "visitor_data": "visitor_data (optional)",
+          "allow_unauthenticated_streams": "Allow all unauthenticated stream and M3U requests (pre-1.10 behavior, not recommended)"
+        },
+        "data_description": {
+          "allow_unauthenticated_streams": "When off (default), unauthenticated stream requests are served only for tracks this integration played, and M3U requests need Home Assistant authentication."
         }
       }
     },
@@ -29,7 +33,11 @@
           "auth_file": "Auth (paste Request Headers)",
           "auto_play": "Auto-play when URL is set",
           "po_token": "po_token (optional)",
-          "visitor_data": "visitor_data (optional)"
+          "visitor_data": "visitor_data (optional)",
+          "allow_unauthenticated_streams": "Allow all unauthenticated stream and M3U requests (pre-1.10 behavior, not recommended)"
+        },
+        "data_description": {
+          "allow_unauthenticated_streams": "When off (default), unauthenticated stream requests are served only for tracks this integration played, and M3U requests need Home Assistant authentication."
         }
       }
     }
@@ -46,6 +54,16 @@
         "media_player": {
           "name": "Target",
           "description": "Leave empty to use default target(s) from config"
+        }
+      }
+    },
+    "stop": {
+      "name": "Stop",
+      "description": "End playlist playback and stop the media_player.",
+      "fields": {
+        "media_player": {
+          "name": "Target",
+          "description": "Leave empty to use the same default target(s) as Play URL"
         }
       }
     }

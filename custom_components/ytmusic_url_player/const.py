@@ -11,12 +11,14 @@ CONF_AUTH_FILE: Final = "auth_file"
 CONF_AUTO_PLAY: Final = "auto_play"
 CONF_PO_TOKEN: Final = "po_token"
 CONF_VISITOR_DATA: Final = "visitor_data"
+CONF_ALLOW_UNAUTHENTICATED: Final = "allow_unauthenticated_streams"
 
 # ----------------------------
 # Default Values
 # ----------------------------
 DEFAULT_NAME: Final = "YouTube Music URL Player"
 DEFAULT_AUTO_PLAY: Final = True
+DEFAULT_ALLOW_UNAUTHENTICATED: Final = False
 
 # ----------------------------
 # Internal Data Keys
@@ -53,6 +55,15 @@ PLAYBACK_MODE_LABELS: Final = {
 STREAM_CACHE_TTL_SECONDS: Final = 600  # 10 minutes
 CAST_CACHE_TTL_SECONDS: Final = 300    # 5 minutes
 CAST_SCAN_INTERVAL_SECONDS: Final = 60
+# A playing -> idle change this soon after a play command is the previous
+# content stopping, not the new track ending.
+QUEUE_IDLE_GRACE_SECONDS: Final = 10
+# Skip a queued track the player has not started this long after the command.
+QUEUE_START_TIMEOUT_SECONDS: Final = 90
+# Unauthenticated stream requests are allowed for tracks this integration
+# played or listed, for this long.
+STREAM_GRANT_TTL_SECONDS: Final = 24 * 3600
+STREAM_GRANT_MAX_ENTRIES: Final = 1000
 
 # ----------------------------
 # API Endpoints
