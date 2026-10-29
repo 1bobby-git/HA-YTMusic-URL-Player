@@ -17,6 +17,7 @@ from homeassistant.const import (
     STATE_PAUSED,
     STATE_PLAYING,
 )
+from homeassistant.helpers.area_registry import async_get as async_get_area_registry
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
@@ -260,10 +261,6 @@ class QueueManager:
             entity_id, old_state_str, new_state_str
         )
 
-        if new_state_str in (STATE_PLAYING, _STATE_BUFFERING):
-            # The player is playing again: earlier failures do not count.
-            queue.failures = 0
-
         if new_state_str == STATE_OFF and old_state_str != STATE_OFF:
             if self._just_commanded(queue):
                 # Usually the previous app closing; if the player stays off,
@@ -276,10 +273,13 @@ class QueueManager:
         # Track finished: was playing, now idle
         if old_state_str == STATE_PLAYING and new_state_str == STATE_IDLE:
             if self._just_commanded(queue):
-                # The content that played before our command stopped.
+                # The content that played before our command stopped, or a
+                # renderer gave up on the stream at once (the watchdog counts
+                # that as a failure).
                 _LOGGER.debug("[Queue] %s went idle right after a play command, ignored", entity_id)
                 return
             _LOGGER.info("[Queue] Track finished on %s, playing next...", entity_id)
+            queue.failures = 0  # this track played through
             self._spawn(self._play_next(entity_id, queue, queue.attempt))
 
     def _ensure_service_listener(self) -> None:
@@ -344,42 +344,63 @@ class QueueManager:
             self._request_stop(entity_id, f"media_player.{service} was called")
 
     def _targeted_queues(self, service_data: dict[str, Any]) -> list[str]:
-        """Queued players a service call addresses by entity, device or area."""
+        """Queued players a service call addresses by entity, device, area, floor or label."""
         entity_target = service_data.get("entity_id")
         if isinstance(entity_target, str) and entity_target.strip().lower() == "all":
             return list(self._queues)
         entity_ids = _as_id_set(entity_target)
         device_ids = _as_id_set(service_data.get("device_id"))
         area_ids = _as_id_set(service_data.get("area_id"))
+        floor_ids = _as_id_set(service_data.get("floor_id"))
+        label_ids = _as_id_set(service_data.get("label_id"))
         targeted = [entity_id for entity_id in self._queues if entity_id in entity_ids]
-        if device_ids or area_ids:
+        if device_ids or area_ids or floor_ids or label_ids:
             targeted += [
                 entity_id
                 for entity_id in self._queues
                 if entity_id not in targeted
-                and self._in_devices_or_areas(entity_id, device_ids, area_ids)
+                and self._is_targeted(entity_id, device_ids, area_ids, floor_ids, label_ids)
             ]
         return targeted
 
-    def _in_devices_or_areas(
-        self, entity_id: str, device_ids: set[str], area_ids: set[str]
+    def _is_targeted(
+        self,
+        entity_id: str,
+        device_ids: set[str],
+        area_ids: set[str],
+        floor_ids: set[str],
+        label_ids: set[str],
     ) -> bool:
+        """Resolve a device/area/floor/label target like Home Assistant does."""
         try:
             entry = async_get_entity_registry(self.hass).async_get(entity_id)
             if entry is None:
                 return False
-            if entry.device_id and entry.device_id in device_ids:
-                return True
-            if not area_ids:
-                return False
-            if entry.area_id:
-                return entry.area_id in area_ids
             device = (
                 async_get_device_registry(self.hass).async_get(entry.device_id)
                 if entry.device_id
                 else None
             )
-            return bool(device and device.area_id in area_ids)
+            if entry.device_id and entry.device_id in device_ids:
+                return True
+            # The entity's own area wins over its device's area.
+            area_id = entry.area_id or (device.area_id if device else None)
+            if area_id and area_id in area_ids:
+                return True
+            area = None
+            if area_id and (floor_ids or label_ids):
+                area = async_get_area_registry(self.hass).async_get_area(area_id)
+            if floor_ids and area is not None and getattr(area, "floor_id", None) in floor_ids:
+                return True
+            if label_ids:
+                labels = set(getattr(entry, "labels", ()) or ())
+                if device is not None:
+                    labels |= set(getattr(device, "labels", ()) or ())
+                if area is not None:
+                    labels |= set(getattr(area, "labels", ()) or ())
+                if labels & label_ids:
+                    return True
+            return False
         except Exception as err:  # registry lookup must never break the bus
             _LOGGER.debug("[Queue] Could not resolve target of %s: %s", entity_id, err)
             return False

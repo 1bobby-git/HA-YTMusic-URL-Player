@@ -27,6 +27,7 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         constants.EVENT_CALL_SERVICE = "call_service"
         self.entity_entries: dict[str, types.SimpleNamespace] = {}
         self.device_entries: dict[str, types.SimpleNamespace] = {}
+        self.area_entries: dict[str, types.SimpleNamespace] = {}
         entity_registry = types.ModuleType("homeassistant.helpers.entity_registry")
         entity_registry.async_get = lambda _hass: types.SimpleNamespace(
             async_get=self.entity_entries.get
@@ -34,6 +35,10 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         device_registry = types.ModuleType("homeassistant.helpers.device_registry")
         device_registry.async_get = lambda _hass: types.SimpleNamespace(
             async_get=self.device_entries.get
+        )
+        area_registry = types.ModuleType("homeassistant.helpers.area_registry")
+        area_registry.async_get = lambda _hass: types.SimpleNamespace(
+            async_get_area=self.area_entries.get
         )
         event = types.ModuleType("homeassistant.helpers.event")
         self.unsubscribe = Mock()
@@ -57,6 +62,7 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
             "homeassistant.helpers.event": event,
             "homeassistant.helpers.entity_registry": entity_registry,
             "homeassistant.helpers.device_registry": device_registry,
+            "homeassistant.helpers.area_registry": area_registry,
         })
         self.modules.start()
         self.addCleanup(self.modules.stop)
@@ -361,6 +367,44 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         self.assertFalse(self.manager.has_queue(ENTITY))
 
+    async def test_stop_by_floor_or_label_ends_queue(self) -> None:
+        self.entity_entries[ENTITY] = types.SimpleNamespace(
+            device_id="dev1", area_id=None, labels={"music"}
+        )
+        self.device_entries["dev1"] = types.SimpleNamespace(area_id="living_room", labels=set())
+        self.area_entries["living_room"] = types.SimpleNamespace(floor_id="ground", labels={"downstairs"})
+
+        for target in (
+            {"floor_id": "ground"},
+            {"label_id": "music"},
+            {"label_id": ["downstairs"]},
+        ):
+            with self.subTest(target=target):
+                await self.start([{"videoId": "a"}])
+                self.service_call("media_stop", floor_id="upstairs")
+                self.service_call("media_stop", label_id="kids")
+                await self.settle()
+                self.assertTrue(self.manager.has_queue(ENTITY))
+
+                self.service_call("media_stop", **target)
+                await self.settle()
+                self.assertFalse(self.manager.has_queue(ENTITY))
+
+    async def test_renderer_that_fails_at_once_still_hits_the_failure_bound(self) -> None:
+        await self.start([{"videoId": f"t{i}"} for i in range(10)])
+        self.player_states[ENTITY] = types.SimpleNamespace(state="idle")
+
+        for _ in range(3):
+            # Reports playing for a moment, then gives up on the stream.
+            self.player("idle", "playing")
+            self.player("playing", "idle")
+            await self.settle()
+            self.timers[-1].action(None)
+            await self.settle()
+
+        self.assertEqual(["t0", "t1", "t2"], self.played())
+        self.assertFalse(self.manager.has_queue(ENTITY))
+
     async def test_watchdog_ends_queue_when_player_is_gone(self) -> None:
         for state in ("off", "unavailable", "unknown", None):
             with self.subTest(state=state):
@@ -412,9 +456,10 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         self.play.side_effect = [RuntimeError("x"), RuntimeError("x"), None, None, None]
         await self.start([{"videoId": f"t{i}"} for i in range(6)])
         self.player("idle", "playing")
+        self.assertEqual(2, self.manager._queues[ENTITY].failures)
         self.now += 180
 
-        self.player("playing", "idle")
+        self.player("playing", "idle")  # the track played through
         await self.settle()
 
         self.assertTrue(self.manager.has_queue(ENTITY))

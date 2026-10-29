@@ -218,14 +218,14 @@ class CastManager:
                 cast_info = cc.cast_info if hasattr(cc, 'cast_info') else cc
                 host = getattr(cast_info, 'host', None) or getattr(cc, 'host', 'unknown')
                 port = getattr(cast_info, 'port', None) or getattr(cc, 'port', 8009)
-                uuid = str(getattr(cast_info, 'uuid', None) or getattr(cc, 'uuid', ''))
+                device_uuid = str(getattr(cast_info, 'uuid', None) or getattr(cc, 'uuid', ''))
                 name = getattr(cc, 'name', '') or getattr(cast_info, 'friendly_name', '')
 
                 device = CastDevice(
                     name=name,
                     host=host,
                     port=port,
-                    uuid=uuid,
+                    uuid=device_uuid,
                     cast=cc,
                     last_used=now,
                 )
