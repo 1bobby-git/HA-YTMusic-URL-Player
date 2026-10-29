@@ -452,7 +452,7 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["t0", "t1", "t2"], self.played())
         self.assertFalse(self.manager.has_queue(ENTITY))
 
-    async def test_playing_resets_the_failure_count(self) -> None:
+    async def test_failure_count_survives_playing_and_resets_when_a_track_plays_through(self) -> None:
         self.play.side_effect = [RuntimeError("x"), RuntimeError("x"), None, None, None]
         await self.start([{"videoId": f"t{i}"} for i in range(6)])
         self.player("idle", "playing")
@@ -464,6 +464,58 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.manager.has_queue(ENTITY))
         self.assertEqual(0, self.manager._queues[ENTITY].failures)
+
+    async def test_watchdog_finding_the_track_active_resets_the_failure_count(self) -> None:
+        self.play.side_effect = [RuntimeError("x"), RuntimeError("x"), None]
+        await self.start([{"videoId": f"t{i}"} for i in range(6)])
+        self.assertEqual(2, self.manager._queues[ENTITY].failures)
+        self.player_states[ENTITY] = types.SimpleNamespace(state="playing")
+
+        self.timers[-1].action(None)
+        await self.settle()
+
+        self.assertEqual(0, self.manager._queues[ENTITY].failures)
+
+    async def test_short_track_ending_inside_the_grace_window_plays_the_next(self) -> None:
+        await self.start([
+            {"videoId": "intro", "duration_seconds": 6},
+            {"videoId": "song", "duration_seconds": 200},
+        ])
+
+        self.now += 1  # the previous content stops: still ignored
+        self.player("playing", "idle")
+        await self.settle()
+        self.assertEqual(["intro"], self.played())
+
+        self.now += 5  # the 6 s intro ends
+        self.player("playing", "idle")
+        await self.settle()
+        self.assertEqual(["intro", "song"], self.played())
+
+    async def test_short_tracks_missed_by_the_player_do_not_end_the_playlist(self) -> None:
+        await self.start([{"videoId": f"s{i}", "duration_seconds": 5} for i in range(5)])
+        self.player_states[ENTITY] = types.SimpleNamespace(state="idle")
+
+        for _ in range(4):
+            self.timers[-1].action(None)
+            await self.settle()
+
+        self.assertEqual(["s0", "s1", "s2", "s3", "s4"], self.played())
+        self.assertTrue(self.manager.has_queue(ENTITY))
+
+    async def test_hidden_player_is_not_reached_by_area_targets(self) -> None:
+        self.entity_entries[ENTITY] = types.SimpleNamespace(
+            device_id=None, area_id="living_room", labels=set(), hidden_by="user"
+        )
+        await self.start([{"videoId": "a"}])
+
+        self.service_call("media_stop", area_id="living_room")
+        await self.settle()
+        self.assertTrue(self.manager.has_queue(ENTITY))
+
+        self.service_call("media_stop", entity_id=ENTITY)
+        await self.settle()
+        self.assertFalse(self.manager.has_queue(ENTITY))
 
     async def test_end_event_of_a_replaced_queue_is_ignored(self) -> None:
         await self.start([{"videoId": "old"}])

@@ -239,6 +239,25 @@ class QueueManager:
             or self._clock() - queue.command_at < QUEUE_IDLE_GRACE_SECONDS
         )
 
+    @staticmethod
+    def _short_track_seconds(queue: PlaybackQueue) -> float | None:
+        """Known duration of the current track if it is shorter than the grace window."""
+        if not 0 <= queue.current_index < len(queue.tracks):
+            return None
+        duration = queue.tracks[queue.current_index].get("duration_seconds")
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            return None
+        return float(duration) if 0 < duration < QUEUE_IDLE_GRACE_SECONDS else None
+
+    def _short_track_finished(self, queue: PlaybackQueue) -> bool:
+        """An idle inside the grace window that matches a short track's length."""
+        duration = self._short_track_seconds(queue)
+        return (
+            duration is not None
+            and queue.command_at is not None
+            and self._clock() - queue.command_at >= max(1.0, duration - 2)
+        )
+
     @callback
     def _on_state_change(self, event: Event) -> None:
         """Handle media_player state changes."""
@@ -272,7 +291,7 @@ class QueueManager:
 
         # Track finished: was playing, now idle
         if old_state_str == STATE_PLAYING and new_state_str == STATE_IDLE:
-            if self._just_commanded(queue):
+            if self._just_commanded(queue) and not self._short_track_finished(queue):
                 # The content that played before our command stopped, or a
                 # renderer gave up on the stream at once (the watchdog counts
                 # that as a failure).
@@ -374,7 +393,8 @@ class QueueManager:
         """Resolve a device/area/floor/label target like Home Assistant does."""
         try:
             entry = async_get_entity_registry(self.hass).async_get(entity_id)
-            if entry is None:
+            if entry is None or getattr(entry, "hidden_by", None):
+                # Home Assistant leaves hidden entities out of indirect targets.
                 return False
             device = (
                 async_get_device_registry(self.hass).async_get(entry.device_id)
@@ -599,7 +619,9 @@ class QueueManager:
                 queue.current_index + 1, len(queue.tracks), entity_id,
                 QUEUE_START_TIMEOUT_SECONDS,
             )
-            if self._too_many_failures(queue):
+            # A track shorter than the grace window may have played through
+            # unnoticed; it does not count as a failure.
+            if self._short_track_seconds(queue) is None and self._too_many_failures(queue):
                 await self._stop_queue(entity_id)
                 return
             if await self._advance_queue(entity_id):
