@@ -163,7 +163,7 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
         const.DEFAULT_ALLOW_UNAUTHENTICATED = False
         const.STREAM_CACHE_TTL_SECONDS = 600
         const.STREAM_GRANT_TTL_SECONDS = 24 * 3600
-        const.STREAM_GRANT_MAX_ENTRIES = 1000
+        const.STREAM_GRANT_MAX_ENTRIES = 10000
         const.API_STREAM_PATH = "stream"
         const.API_M3U_PATH = "m3u"
         ytmusic_client = types.ModuleType("custom_components.ytmusic_url_player.ytmusic_client")

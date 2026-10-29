@@ -148,7 +148,7 @@ class ServiceQueueControlTest(unittest.IsolatedAsyncioTestCase):
             data["media_content_id"],
         )
 
-    async def test_stop_ends_queue_and_stops_default_targets(self) -> None:
+    async def test_stop_ends_queue_and_stops_each_default_target(self) -> None:
         await self.module.async_stop(self.hass, _Entry(["media_player.a", "media_player.b"]))
 
         self.assertEqual(
@@ -156,9 +156,39 @@ class ServiceQueueControlTest(unittest.IsolatedAsyncioTestCase):
             [call.args[0] for call in self.queue_manager.stop_playlist.await_args_list],
         )
         self.assertEqual(
-            [("media_player", "media_stop", {"entity_id": ["media_player.a", "media_player.b"]})],
+            [
+                ("media_player", "media_stop", {"entity_id": "media_player.a"}),
+                ("media_player", "media_stop", {"entity_id": "media_player.b"}),
+            ],
             self.calls(),
         )
+
+    async def test_stop_pauses_players_that_cannot_stop(self) -> None:
+        features = {"media_player.stop_ok": 4096 | 1, "media_player.pause_only": 1}
+        self.hass.states = types.SimpleNamespace(
+            get=lambda entity_id: types.SimpleNamespace(
+                attributes={"supported_features": features[entity_id]}
+            )
+        )
+
+        await self.module.async_stop(
+            self.hass, _Entry(), ["media_player.stop_ok", "media_player.pause_only"]
+        )
+
+        self.assertEqual(
+            [
+                ("media_player", "media_stop", {"entity_id": "media_player.stop_ok"}),
+                ("media_player", "media_pause", {"entity_id": "media_player.pause_only"}),
+            ],
+            self.calls(),
+        )
+
+    async def test_one_failing_player_does_not_block_the_others(self) -> None:
+        self.hass.services.async_call.side_effect = [RuntimeError("not supported"), None]
+
+        await self.module.async_stop(self.hass, _Entry(), ["media_player.a", "media_player.b"])
+
+        self.assertEqual(2, self.hass.services.async_call.await_count)
 
     async def test_stop_uses_select_override_like_play_url(self) -> None:
         self.hass.data[self.module.DOMAIN]["entry-1"][self.module.DATA_TARGET_OVERRIDE] = (

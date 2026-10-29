@@ -17,4 +17,4 @@
 
 ## 노출 범위
 
-이 통합은 미디어 플레이어가 쓰는 스트림 엔드포인트(`/api/ytmusic_url_player/stream/<videoId>`)를 인증 없이 열어 둡니다. 1.10.0부터 인증 없는 요청은 이 통합이 재생한 곡만 받고, M3U 엔드포인트는 Home Assistant 인증이 필요합니다. 옵션 `allow_unauthenticated_streams`를 켜면 이 제한이 풀립니다.
+이 통합은 미디어 플레이어가 쓰는 스트림 엔드포인트(`/api/ytmusic_url_player/stream/<videoId>`)를 인증 없이 열어 둡니다. 1.10.0부터 인증 없는 요청은 이 통합이 재생 명령을 보낸 곡과 M3U에 넣은 곡만 받고, M3U 엔드포인트는 Home Assistant 인증이 필요합니다. 옵션 `allow_unauthenticated_streams`를 켜면 이 제한이 풀립니다.

@@ -21,6 +21,8 @@ from .const import (
     DATA_EXTRACTOR,
     DATA_YTMUSIC,
     API_STREAM_PATH,
+    MEDIA_PLAYER_FEATURE_PAUSE,
+    MEDIA_PLAYER_FEATURE_STOP,
 )
 from .url_parser import parse_url
 from .queue_manager import QueueManager
@@ -90,6 +92,18 @@ def _get_cast_friendly_name(hass: HomeAssistant, entity_id: str) -> str | None:
     return None
 
 
+def _get_cast_uuid(hass: HomeAssistant, entity_id: str) -> str | None:
+    """The Cast UUID, which the cast integration uses as the entity unique ID."""
+    try:
+        from homeassistant.helpers import entity_registry as er
+        entry = er.async_get(hass).async_get(entity_id)
+    except Exception:
+        return None
+    if entry and entry.platform == "cast" and entry.unique_id:
+        return str(entry.unique_id)
+    return None
+
+
 def _get_base_url(hass: HomeAssistant) -> str:
     """Get base URL for HA proxy - simple approach like v1.6."""
     # Try internal first (most common for local Cast devices)
@@ -129,16 +143,17 @@ async def _play_on_device(
     if _is_cast_device(hass, entity_id):
         cast_manager = _get_cast_manager(hass)
         friendly_name = _get_cast_friendly_name(hass, entity_id)
+        cast_uuid = _get_cast_uuid(hass, entity_id)
 
         if cast_manager and friendly_name:
-            cast_type = await cast_manager.async_get_cast_type(friendly_name)
+            cast_type = await cast_manager.async_get_cast_type(friendly_name, uuid=cast_uuid)
             _LOGGER.debug("[Play] Cast device type: %s", cast_type)
 
             # Only try native YouTube for devices with screen
             if cast_type and cast_type != 'audio':
                 try:
                     success = await cast_manager.async_play_youtube_native(
-                        friendly_name, video_id, playlist_id, is_music_url
+                        friendly_name, video_id, playlist_id, is_music_url, uuid=cast_uuid
                     )
                     if success:
                         _LOGGER.info("[Play] ✓ Native YouTube: %s", video_id)
@@ -378,16 +393,27 @@ async def async_stop(
         for target in targets:
             await queue_manager.stop_playlist(target)
 
-    try:
-        await hass.services.async_call(
-            "media_player",
-            "media_stop",
-            {"entity_id": targets},
-            blocking=True,
-        )
-    except Exception as err:
-        # The queue is already ended; some players cannot stop, only pause.
-        _LOGGER.warning("[Service] media_stop failed on %s: %s", targets, err)
+    # One call per player: Home Assistant rejects a whole multi-entity call
+    # when a single target lacks the feature.
+    for target in targets:
+        state = hass.states.get(target)
+        try:
+            features = int(state.attributes.get("supported_features") or 0) if state else 0
+        except (TypeError, ValueError):
+            features = 0
+        service = "media_stop"
+        if not features & MEDIA_PLAYER_FEATURE_STOP and features & MEDIA_PLAYER_FEATURE_PAUSE:
+            service = "media_pause"  # players that can pause but not stop
+        try:
+            await hass.services.async_call(
+                "media_player",
+                service,
+                {"entity_id": target},
+                blocking=True,
+            )
+        except Exception as err:
+            # The queue is already ended.
+            _LOGGER.warning("[Service] %s failed on %s: %s", service, target, err)
 
 
 def async_register_services(hass: HomeAssistant) -> None:

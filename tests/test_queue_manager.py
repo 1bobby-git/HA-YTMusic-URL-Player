@@ -22,9 +22,19 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
         core.Event = object
         core.callback = lambda func: func
         constants = types.ModuleType("homeassistant.const")
-        for name in ("IDLE", "PAUSED", "PLAYING", "OFF"):
+        for name in ("IDLE", "PAUSED", "PLAYING", "OFF", "ON"):
             setattr(constants, f"STATE_{name}", name.lower())
         constants.EVENT_CALL_SERVICE = "call_service"
+        self.entity_entries: dict[str, types.SimpleNamespace] = {}
+        self.device_entries: dict[str, types.SimpleNamespace] = {}
+        entity_registry = types.ModuleType("homeassistant.helpers.entity_registry")
+        entity_registry.async_get = lambda _hass: types.SimpleNamespace(
+            async_get=self.entity_entries.get
+        )
+        device_registry = types.ModuleType("homeassistant.helpers.device_registry")
+        device_registry.async_get = lambda _hass: types.SimpleNamespace(
+            async_get=self.device_entries.get
+        )
         event = types.ModuleType("homeassistant.helpers.event")
         self.unsubscribe = Mock()
         event.async_track_state_change_event = Mock(return_value=self.unsubscribe)
@@ -45,6 +55,8 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
             "homeassistant.core": core,
             "homeassistant.const": constants,
             "homeassistant.helpers.event": event,
+            "homeassistant.helpers.entity_registry": entity_registry,
+            "homeassistant.helpers.device_registry": device_registry,
         })
         self.modules.start()
         self.addCleanup(self.modules.stop)
@@ -312,6 +324,126 @@ class QueueManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.timers[0].cancelled)
         self.unsubscribe_services.assert_called_once()
+
+    # --- 1.10.0 review fixes ---
+
+    async def test_announcements_and_enqueue_keep_the_playlist(self) -> None:
+        await self.start([{"videoId": "a"}, {"videoId": "b"}])
+
+        self.service_call(
+            "play_media", entity_id=ENTITY, media_content_id="media-source://tts/x", announce=True
+        )
+        self.service_call("play_media", entity_id=ENTITY, media_content_id="x", enqueue="add")
+        self.service_call("play_media", entity_id=ENTITY, media_content_id="x", enqueue="next")
+        await self.settle()
+
+        self.assertTrue(self.manager.has_queue(ENTITY))
+
+        self.service_call("play_media", entity_id=ENTITY, media_content_id="x", enqueue="replace")
+        await self.settle()
+        self.assertFalse(self.manager.has_queue(ENTITY))
+
+    async def test_stop_by_area_or_device_ends_queue(self) -> None:
+        self.entity_entries[ENTITY] = types.SimpleNamespace(device_id="dev1", area_id=None)
+        self.device_entries["dev1"] = types.SimpleNamespace(area_id="living_room")
+        await self.start([{"videoId": "a"}])
+
+        self.service_call("media_stop", area_id="kitchen")
+        await self.settle()
+        self.assertTrue(self.manager.has_queue(ENTITY))
+
+        self.service_call("media_stop", area_id=["living_room"])
+        await self.settle()
+        self.assertFalse(self.manager.has_queue(ENTITY))
+
+        await self.start([{"videoId": "a"}])
+        self.service_call("turn_off", device_id="dev1")
+        await self.settle()
+        self.assertFalse(self.manager.has_queue(ENTITY))
+
+    async def test_watchdog_ends_queue_when_player_is_gone(self) -> None:
+        for state in ("off", "unavailable", "unknown", None):
+            with self.subTest(state=state):
+                self.play.reset_mock()
+                self.timers.clear()
+                await self.start([{"videoId": "a"}, {"videoId": "b"}])
+                if state is None:
+                    self.player_states.pop(ENTITY, None)
+                else:
+                    self.player_states[ENTITY] = types.SimpleNamespace(state=state)
+
+                self.timers[0].action(None)
+                await self.settle()
+
+                self.assertEqual(["a"], self.played())
+                self.assertFalse(self.manager.has_queue(ENTITY))
+
+    async def test_watchdog_leaves_an_on_only_player_alone(self) -> None:
+        await self.start([{"videoId": "a"}, {"videoId": "b"}])
+        self.player_states[ENTITY] = types.SimpleNamespace(state="on")
+
+        self.timers[0].action(None)
+        await self.settle()
+
+        self.assertEqual(["a"], self.played())
+        self.assertTrue(self.manager.has_queue(ENTITY))
+
+    async def test_queue_ends_after_three_failures_in_a_row(self) -> None:
+        self.play.side_effect = RuntimeError("rejected")
+        tracks = [{"videoId": f"t{i}"} for i in range(30)]
+
+        await self.start(tracks)
+
+        self.assertEqual(3, self.play.await_count)
+        self.assertFalse(self.manager.has_queue(ENTITY))
+
+    async def test_tracks_that_never_start_end_the_queue_after_three(self) -> None:
+        await self.start([{"videoId": f"t{i}"} for i in range(10)])
+        self.player_states[ENTITY] = types.SimpleNamespace(state="idle")
+
+        for _ in range(3):
+            self.timers[-1].action(None)
+            await self.settle()
+
+        self.assertEqual(["t0", "t1", "t2"], self.played())
+        self.assertFalse(self.manager.has_queue(ENTITY))
+
+    async def test_playing_resets_the_failure_count(self) -> None:
+        self.play.side_effect = [RuntimeError("x"), RuntimeError("x"), None, None, None]
+        await self.start([{"videoId": f"t{i}"} for i in range(6)])
+        self.player("idle", "playing")
+        self.now += 180
+
+        self.player("playing", "idle")
+        await self.settle()
+
+        self.assertTrue(self.manager.has_queue(ENTITY))
+        self.assertEqual(0, self.manager._queues[ENTITY].failures)
+
+    async def test_end_event_of_a_replaced_queue_is_ignored(self) -> None:
+        await self.start([{"videoId": "old"}])
+        old_queue = self.manager._queues[ENTITY]
+        old_attempt = old_queue.attempt
+        await self.start([{"videoId": "new1"}, {"videoId": "new2"}])
+
+        await self.manager._play_next(ENTITY, old_queue, old_attempt)
+
+        self.assertEqual(["old", "new1"], self.played())
+        self.assertEqual(0, self.manager.get_queue_info(ENTITY)["current_index"])
+
+    async def test_stop_playlist_deactivates_before_waiting_for_the_lock(self) -> None:
+        await self.start([{"videoId": "a"}, {"videoId": "b"}])
+        queue = self.manager._queues[ENTITY]
+        await self.manager._lock.acquire()
+
+        stopping = asyncio.create_task(self.manager.stop_playlist(ENTITY))
+        await asyncio.sleep(0)
+
+        self.assertFalse(queue.is_active)
+        self.assertTrue(self.timers[0].cancelled)
+        self.manager._lock.release()
+        await asyncio.wait_for(stopping, timeout=0.2)
+        self.assertIsNone(self.manager.get_queue_info(ENTITY))
 
 
 if __name__ == "__main__":

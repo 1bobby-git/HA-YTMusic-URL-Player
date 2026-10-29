@@ -13,9 +13,12 @@ from homeassistant.const import (
     EVENT_CALL_SERVICE,
     STATE_IDLE,
     STATE_OFF,
+    STATE_ON,
     STATE_PAUSED,
     STATE_PLAYING,
 )
+from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from .const import (
@@ -27,18 +30,33 @@ from .const import (
     PLAYBACK_MODE_ONCE,
     PLAYBACK_MODE_SHUFFLE,
     QUEUE_IDLE_GRACE_SECONDS,
+    QUEUE_MAX_CONSECUTIVE_FAILURES,
     QUEUE_START_TIMEOUT_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 _STATE_BUFFERING = "buffering"
-# A player in one of these states has the queued track in hand.
-_ACTIVE_STATES = frozenset({STATE_PLAYING, STATE_PAUSED, _STATE_BUFFERING})
+# A player in one of these states has the queued track in hand. Some players
+# only ever report on/off.
+_ACTIVE_STATES = frozenset({STATE_PLAYING, STATE_PAUSED, _STATE_BUFFERING, STATE_ON})
+# A player in one of these states cannot be playing the queue.
+_GONE_STATES = frozenset({STATE_OFF, "unavailable", "unknown"})
 # media_player services that take the player away from the queue.
 _TAKEOVER_SERVICES = frozenset({"media_stop", "turn_off", "play_media"})
+# play_media enqueue values that keep the current playback (MediaPlayerEnqueue).
+_KEEP_PLAYING_ENQUEUE = frozenset({"add", "next"})
 # Every stream URL this integration sends contains this path.
 OWN_STREAM_MARKER = f"/api/{DOMAIN}/{API_STREAM_PATH}/"
+
+
+def _as_id_set(value: Any) -> set[str]:
+    """Normalise an entity/device/area id target (str, comma list or list)."""
+    if isinstance(value, str):
+        return {part.strip() for part in value.split(",") if part.strip()}
+    if isinstance(value, (list, tuple, set)):
+        return {str(part).strip() for part in value if str(part).strip()}
+    return set()
 
 
 @dataclass
@@ -57,6 +75,8 @@ class PlaybackQueue:
     # Monotonic time the last play command returned; None while it runs.
     command_at: float | None = None
     cancel_watchdog: Callable | None = None
+    # Tracks in a row whose play command failed or that never started.
+    failures: int = 0
 
 
 class QueueManager:
@@ -168,6 +188,12 @@ class QueueManager:
 
     async def stop_playlist(self, entity_id: str) -> None:
         """Stop the playlist queue for the given entity."""
+        queue = self._queues.get(entity_id)
+        if queue is not None:
+            # Inactive at once: a play loop holding the lock gives up at its
+            # next step instead of making the caller wait for every track.
+            queue.is_active = False
+            self._cancel_watchdog(queue)
         async with self._lock:
             await self._stop_queue(entity_id)
 
@@ -234,8 +260,14 @@ class QueueManager:
             entity_id, old_state_str, new_state_str
         )
 
+        if new_state_str in (STATE_PLAYING, _STATE_BUFFERING):
+            # The player is playing again: earlier failures do not count.
+            queue.failures = 0
+
         if new_state_str == STATE_OFF and old_state_str != STATE_OFF:
             if self._just_commanded(queue):
+                # Usually the previous app closing; if the player stays off,
+                # the start watchdog ends the queue.
                 _LOGGER.debug("[Queue] %s switched off around a play command, ignored", entity_id)
                 return
             self._request_stop(entity_id, "the player was turned off")
@@ -248,7 +280,7 @@ class QueueManager:
                 _LOGGER.debug("[Queue] %s went idle right after a play command, ignored", entity_id)
                 return
             _LOGGER.info("[Queue] Track finished on %s, playing next...", entity_id)
-            self._spawn(self._play_next(entity_id, queue.attempt))
+            self._spawn(self._play_next(entity_id, queue, queue.attempt))
 
     def _ensure_service_listener(self) -> None:
         if self._unsub_service_calls is None:
@@ -261,6 +293,34 @@ class QueueManager:
             self._unsub_service_calls()
             self._unsub_service_calls = None
 
+    def _is_current(
+        self, entity_id: str, queue: PlaybackQueue | None, attempt: int | None
+    ) -> bool:
+        """Whether an event about (queue, attempt) still concerns the live track."""
+        current = self._queues.get(entity_id)
+        if queue is not None and current is not queue:
+            return False  # the queue was replaced meanwhile
+        if attempt is not None and (current is None or current.attempt != attempt):
+            return False  # this track was already handled
+        return True
+
+    async def _play_next(
+        self,
+        entity_id: str,
+        queue: PlaybackQueue | None = None,
+        attempt: int | None = None,
+    ) -> None:
+        """Play the next track while holding the queue lock once.
+
+        ``queue`` and ``attempt`` identify the play command the end event
+        belongs to; events for an earlier track or queue are ignored.
+        """
+        async with self._lock:
+            if not self._is_current(entity_id, queue, attempt):
+                return
+            if await self._advance_queue(entity_id):
+                await self._play_current(entity_id)
+
     @callback
     def _on_call_service(self, event: Event) -> None:
         """End the queue when Home Assistant stops the player or plays other content on it."""
@@ -269,36 +329,60 @@ class QueueManager:
         if data.get("domain") != "media_player" or service not in _TAKEOVER_SERVICES:
             return
         service_data = data.get("service_data") or {}
-        if service == "play_media" and OWN_STREAM_MARKER in str(
-            service_data.get("media_content_id") or ""
-        ):
-            return
-        for entity_id in self._targeted_queues(service_data.get("entity_id")):
+        if service == "play_media":
+            enqueue = service_data.get("enqueue")
+            if (
+                # Announcements (tts.speak) and queued additions leave the
+                # current track playing.
+                service_data.get("announce")
+                or enqueue is True
+                or enqueue in _KEEP_PLAYING_ENQUEUE
+                or OWN_STREAM_MARKER in str(service_data.get("media_content_id") or "")
+            ):
+                return
+        for entity_id in self._targeted_queues(service_data):
             self._request_stop(entity_id, f"media_player.{service} was called")
 
-    def _targeted_queues(self, target: Any) -> list[str]:
-        if isinstance(target, str):
-            if target.strip().lower() == "all":
-                return list(self._queues)
-            ids = [part.strip() for part in target.split(",")]
-        elif isinstance(target, (list, tuple, set)):
-            ids = [str(part).strip() for part in target]
-        else:
-            return []
-        return [entity_id for entity_id in ids if entity_id in self._queues]
+    def _targeted_queues(self, service_data: dict[str, Any]) -> list[str]:
+        """Queued players a service call addresses by entity, device or area."""
+        entity_target = service_data.get("entity_id")
+        if isinstance(entity_target, str) and entity_target.strip().lower() == "all":
+            return list(self._queues)
+        entity_ids = _as_id_set(entity_target)
+        device_ids = _as_id_set(service_data.get("device_id"))
+        area_ids = _as_id_set(service_data.get("area_id"))
+        targeted = [entity_id for entity_id in self._queues if entity_id in entity_ids]
+        if device_ids or area_ids:
+            targeted += [
+                entity_id
+                for entity_id in self._queues
+                if entity_id not in targeted
+                and self._in_devices_or_areas(entity_id, device_ids, area_ids)
+            ]
+        return targeted
 
-    async def _play_next(self, entity_id: str, attempt: int | None = None) -> None:
-        """Play the next track while holding the queue lock once.
-
-        ``attempt`` identifies the play command the end event belongs to; a
-        second end event for the same track is ignored.
-        """
-        async with self._lock:
-            queue = self._queues.get(entity_id)
-            if attempt is not None and (queue is None or queue.attempt != attempt):
-                return
-            if await self._advance_queue(entity_id):
-                await self._play_current(entity_id)
+    def _in_devices_or_areas(
+        self, entity_id: str, device_ids: set[str], area_ids: set[str]
+    ) -> bool:
+        try:
+            entry = async_get_entity_registry(self.hass).async_get(entity_id)
+            if entry is None:
+                return False
+            if entry.device_id and entry.device_id in device_ids:
+                return True
+            if not area_ids:
+                return False
+            if entry.area_id:
+                return entry.area_id in area_ids
+            device = (
+                async_get_device_registry(self.hass).async_get(entry.device_id)
+                if entry.device_id
+                else None
+            )
+            return bool(device and device.area_id in area_ids)
+        except Exception as err:  # registry lookup must never break the bus
+            _LOGGER.debug("[Queue] Could not resolve target of %s: %s", entity_id, err)
+            return False
 
     async def _advance_queue(self, entity_id: str) -> bool:
         """Advance a queue; the caller must already hold the lock."""
@@ -397,15 +481,18 @@ class QueueManager:
                 queue.attempt += 1
                 queue.command_at = None
                 self._cancel_watchdog(queue)
+                failed = False
                 try:
                     result = await self._play_callback(entity_id, video_id, track)
                 except Exception as err:
                     _LOGGER.error("[Queue] Failed to play track: %s", err)
+                    failed = True
                 else:
                     if result is False:
                         _LOGGER.error(
                             "[Queue] Failed to play track %s on %s", video_id, entity_id
                         )
+                        failed = True
                     elif not queue.is_active:
                         # Stopped while the play command ran.
                         return
@@ -419,6 +506,9 @@ class QueueManager:
                             if next_video_id:
                                 self._spawn(self._prefetch_metadata(next_video_id))
                         return
+                if failed and self._too_many_failures(queue):
+                    await self._stop_queue(entity_id)
+                    return
             else:
                 return
 
@@ -428,6 +518,22 @@ class QueueManager:
         _LOGGER.warning("[Queue] No playable tracks remain for %s", entity_id)
         await self._stop_queue(entity_id)
 
+    @staticmethod
+    def _too_many_failures(queue: PlaybackQueue) -> bool:
+        """Count a track that did not play; True once too many failed in a row.
+
+        Bounds the work (one stream extraction per track) on a player that
+        rejects or never starts every track.
+        """
+        queue.failures += 1
+        if queue.failures < QUEUE_MAX_CONSECUTIVE_FAILURES:
+            return False
+        _LOGGER.warning(
+            "[Queue] %d tracks in a row did not play on %s, ending its playlist",
+            queue.failures, queue.entity_id,
+        )
+        return True
+
     def _arm_watchdog(self, queue: PlaybackQueue) -> None:
         """Skip the track if the player has not started it in time."""
         self._cancel_watchdog(queue)
@@ -436,7 +542,7 @@ class QueueManager:
         @callback
         def _expired(_now) -> None:
             queue.cancel_watchdog = None
-            self._spawn(self._check_started(entity_id, attempt))
+            self._spawn(self._check_started(entity_id, queue, attempt))
 
         queue.cancel_watchdog = async_call_later(
             self.hass, QUEUE_START_TIMEOUT_SECONDS, _expired
@@ -448,19 +554,33 @@ class QueueManager:
             queue.cancel_watchdog()
             queue.cancel_watchdog = None
 
-    async def _check_started(self, entity_id: str, attempt: int) -> None:
+    async def _check_started(
+        self, entity_id: str, queue: PlaybackQueue, attempt: int
+    ) -> None:
         async with self._lock:
-            queue = self._queues.get(entity_id)
-            if queue is None or not queue.is_active or queue.attempt != attempt:
+            if not self._is_current(entity_id, queue, attempt) or not queue.is_active:
                 return
             state = self.hass.states.get(entity_id)
-            if state is not None and state.state in _ACTIVE_STATES:
+            state_str = state.state if state is not None else None
+            if state_str in _ACTIVE_STATES:
+                queue.failures = 0
+                return
+            if state_str is None or state_str in _GONE_STATES:
+                # Off, unavailable or removed: playing on would only wake the
+                # player later by itself.
+                _LOGGER.warning(
+                    "[Queue] %s is %s, ending its playlist", entity_id, state_str or "missing"
+                )
+                await self._stop_queue(entity_id)
                 return
             _LOGGER.warning(
                 "[Queue] Track %d/%d did not start on %s within %d s, skipping",
                 queue.current_index + 1, len(queue.tracks), entity_id,
                 QUEUE_START_TIMEOUT_SECONDS,
             )
+            if self._too_many_failures(queue):
+                await self._stop_queue(entity_id)
+                return
             if await self._advance_queue(entity_id):
                 await self._play_current(entity_id)
 

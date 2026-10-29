@@ -69,6 +69,16 @@ class CastManagerMatchTest(unittest.TestCase):
 
         self.assertIsNone(self.manager._match_device("주방"))
 
+    def test_cast_uuid_wins_over_names(self) -> None:
+        self.add("거실 스피커")
+        tv = self.add("거실 TV")
+        tv.uuid = "A1B2C3D4-0000-1111-2222-333344445555"
+
+        self.assertIs(
+            tv, self.manager._match_device("거실", "a1b2c3d4-0000-1111-2222-333344445555")
+        )
+        self.assertIsNone(self.manager._match_device("거실", "ffffffff-0000-0000-0000-000000000000"))
+
 
 if __name__ == "__main__":
     unittest.main()

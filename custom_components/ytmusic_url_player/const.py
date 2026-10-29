@@ -60,10 +60,17 @@ CAST_SCAN_INTERVAL_SECONDS: Final = 60
 QUEUE_IDLE_GRACE_SECONDS: Final = 10
 # Skip a queued track the player has not started this long after the command.
 QUEUE_START_TIMEOUT_SECONDS: Final = 90
+# End the queue after this many tracks in a row failed to play or start.
+QUEUE_MAX_CONSECUTIVE_FAILURES: Final = 3
 # Unauthenticated stream requests are allowed for tracks this integration
 # played or listed, for this long.
 STREAM_GRANT_TTL_SECONDS: Final = 24 * 3600
-STREAM_GRANT_MAX_ENTRIES: Final = 1000
+# Large enough for a full M3U of a big library (playlists hold up to 5000).
+STREAM_GRANT_MAX_ENTRIES: Final = 10000
+
+# media_player supported_features bits (MediaPlayerEntityFeature)
+MEDIA_PLAYER_FEATURE_PAUSE: Final = 1
+MEDIA_PLAYER_FEATURE_STOP: Final = 4096
 
 # ----------------------------
 # API Endpoints

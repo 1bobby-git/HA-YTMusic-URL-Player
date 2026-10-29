@@ -2,12 +2,14 @@
 
 ## 1.10.0 — 2026-10-30
 
-- 재생 목록 큐를 끝낼 수 있게 했습니다: `ytmusic_url_player.stop` 서비스 추가, 같은 기기로 단일 곡 재생 시 이전 큐 종료, Home Assistant에서 그 기기로 `media_stop`·`turn_off`·다른 콘텐츠 `play_media`를 호출하거나 기기가 꺼지면 큐 종료
-- 재생 명령 직후 10초 안의 `playing → idle`을 무시해 새 재생 목록의 첫 곡을 건너뛰던 문제를 수정했고, 같은 곡의 중복 종료 이벤트는 한 번만 처리
-- 재생 콜백 실패(`False`)를 실패로 처리해 다음 곡으로 넘어가고, 재생 명령 후 90초 안에 재생이 시작되지 않으면 그 곡을 건너뜀
-- 인증 없는 스트림 요청은 이 통합이 재생·큐·M3U에 넣은 영상만 24시간 허용(최대 1000개), M3U는 Home Assistant 인증 필요. 이전 방식은 `allow_unauthenticated_streams` 옵션(기본 꺼짐)
+**호환성 주의**: Home Assistant 밖(VLC·스크립트·저장해 둔 주소)에서 `/api/ytmusic_url_player/stream/…`·`/m3u/…` 주소를 인증 없이 쓰던 경우 403/401이 납니다. 이전 동작은 옵션 `allow_unauthenticated_streams`로 켤 수 있습니다. Home Assistant의 재생 흐름(`play_url`, 텍스트 엔티티, Cast·Sonos·DLNA 등 서명 URL을 쓰는 플레이어)은 그대로 동작합니다.
+
+- 재생 목록 큐를 끝낼 수 있게 했습니다: `ytmusic_url_player.stop` 서비스 추가(대상마다 `media_stop`, 정지 미지원 기기는 `media_pause`), 같은 기기로 단일 곡 재생 시 이전 큐 종료, Home Assistant에서 그 기기로 `media_stop`·`turn_off`·다른 콘텐츠 `play_media`를 호출(`entity_id`·기기·영역·`all` 대상)하거나 기기가 꺼지면 큐 종료. TTS 안내(`announce`)와 `enqueue: add/next`는 큐를 끝내지 않음
+- 재생 명령 직후 10초 안의 `playing → idle`을 무시해 새 재생 목록의 첫 곡을 건너뛰던 문제를 수정했고, 같은 곡이나 교체된 큐의 종료 이벤트는 한 번만 처리
+- 재생 콜백 실패(`False`)를 실패로 처리해 다음 곡으로 넘어가고, 재생 명령 후 90초 안에 재생이 시작되지 않으면 그 곡을 건너뜀. 3곡 연속 실패하거나 그때 기기가 꺼짐·사용 불가·알 수 없음이면 큐 종료
+- 인증 없는 스트림 요청은 이 통합이 재생 명령을 보낸 곡과 M3U에 넣은 곡만 24시간 허용(최대 10000개, 재시작·옵션 저장 시 초기화), M3U는 Home Assistant 인증 필요. 이전 방식은 `allow_unauthenticated_streams` 옵션(기본 꺼짐)
 - yt-dlp의 `nocheckcertificate` 제거(TLS 인증서 검증), `po_token`·`visitor_data`를 pytubefix 폴백 추출에 사용
-- Cast 기기 이름은 정확히 같은 이름을 먼저 찾고, 부분 일치는 후보가 하나일 때만 사용
+- Cast 기기는 Cast UUID(cast 엔티티 unique ID)로 먼저 찾고, 다음으로 정확히 같은 이름, 부분 일치는 후보가 하나일 때만 사용
 - README·설정 문구를 실제 동작에 맞추고 한국어 옵션·서비스 번역과 보안 정책 문서 추가
 - 최소 Home Assistant 버전 표기를 2025.7.0으로 정정(`pytubefix` 10.3.3 이상이 요구하는 aiohttp 3.12.13은 2025.7부터 포함, 그 이전 버전에는 1.9.x도 설치되지 않음)
 - 도메인·엔티티·기존 설정 키·`play_url` 인자·스트림 URL 형식·재생 모드는 변경하지 않음

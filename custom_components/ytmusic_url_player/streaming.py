@@ -92,8 +92,12 @@ class StreamExtractor:
         now = time.monotonic()
         self._stream_grants.pop(video_id, None)
         self._stream_grants[video_id] = now + STREAM_GRANT_TTL_SECONDS
-        for expired in [vid for vid, until in self._stream_grants.items() if until <= now]:
-            del self._stream_grants[expired]
+        # Insertion order is expiry order, so expired grants sit at the front.
+        while self._stream_grants:
+            oldest = next(iter(self._stream_grants))
+            if self._stream_grants[oldest] > now:
+                break
+            del self._stream_grants[oldest]
         while len(self._stream_grants) > STREAM_GRANT_MAX_ENTRIES:
             self._stream_grants.pop(next(iter(self._stream_grants)))
 

@@ -43,9 +43,9 @@ class CastManager:
             return cast.cast_info.cast_type
         return None
 
-    async def async_get_cast_type(self, friendly_name: str) -> str | None:
+    async def async_get_cast_type(self, friendly_name: str, uuid: str | None = None) -> str | None:
         """Get the cast device type by friendly name (async version)."""
-        cast = await self._get_cast_device(friendly_name)
+        cast = await self._get_cast_device(friendly_name, uuid)
         if not cast:
             return None
         return self._get_cast_type(cast)
@@ -56,6 +56,7 @@ class CastManager:
         video_id: str,
         playlist_id: str | None = None,
         is_music_url: bool = False,
+        uuid: str | None = None,
     ) -> bool:
         """Play YouTube/YouTube Music natively on Cast device.
 
@@ -76,7 +77,7 @@ class CastManager:
         loop = asyncio.get_running_loop()
 
         # Get or find Cast device
-        cast = await self._get_cast_device(friendly_name)
+        cast = await self._get_cast_device(friendly_name, uuid)
         if not cast:
             _LOGGER.error("[CastMgr] Cast device not found: %s", friendly_name)
             return False
@@ -140,13 +141,22 @@ class CastManager:
             _LOGGER.error("[CastMgr] YouTube native error: %s", e)
             return False
 
-    def _match_device(self, friendly_name: str) -> CastDevice | None:
-        """Find a cached device by name: exact first, a partial match only if unique.
+    def _find_by_uuid(self, uuid: str | None) -> CastDevice | None:
+        if not uuid:
+            return None
+        wanted = uuid.strip().lower()
+        for candidate in self._devices.values():
+            if candidate.uuid and candidate.uuid.strip().lower() == wanted:
+                return candidate
+        return None
+
+    def _match_device(self, friendly_name: str, uuid: str | None = None) -> CastDevice | None:
+        """Find a cached device: by Cast UUID, then exact name, then a unique partial name.
 
         A partial match picks the wrong speaker when names overlap
         (for example "Living Room" and "Living Room TV").
         """
-        device = self._devices.get(friendly_name)
+        device = self._find_by_uuid(uuid) or self._devices.get(friendly_name)
         if device is not None:
             return device
         wanted = friendly_name.casefold()
@@ -160,7 +170,7 @@ class CastManager:
         ]
         return partial[0] if len(partial) == 1 else None
 
-    async def _get_cast_device(self, friendly_name: str) -> Any | None:
+    async def _get_cast_device(self, friendly_name: str, uuid: str | None = None) -> Any | None:
         """Get Cast device, using cache if available."""
         import pychromecast
 
@@ -168,7 +178,7 @@ class CastManager:
             now = time.time()
 
             # Check cache first
-            cached = self._devices.get(friendly_name)
+            cached = self._find_by_uuid(uuid) or self._devices.get(friendly_name)
             if cached and (now - cached.last_used) < CAST_CACHE_TTL_SECONDS:
                 _LOGGER.debug("[CastMgr] Using cached device: %s", friendly_name)
                 cached.last_used = now
@@ -178,7 +188,7 @@ class CastManager:
             if (now - self._last_scan) < self._scan_interval and self._devices:
                 # Recent scan, device might not exist
                 _LOGGER.debug("[CastMgr] Recent scan, device not in cache")
-                device = self._match_device(friendly_name)
+                device = self._match_device(friendly_name, uuid)
                 if device is not None:
                     device.last_used = now
                     return device.cast
@@ -222,7 +232,7 @@ class CastManager:
                 self._devices[name] = device
                 _LOGGER.debug("[CastMgr] Cached: %s (IP: %s)", name, host)
 
-            found = self._match_device(friendly_name)
+            found = self._match_device(friendly_name, uuid)
             return found.cast if found is not None else None
 
     def clear_cache(self) -> None:

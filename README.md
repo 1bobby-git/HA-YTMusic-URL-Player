@@ -113,7 +113,7 @@ data:
 
 ### `ytmusic_url_player.stop`
 
-재생 목록 연속 재생을 끝내고 `media_player.media_stop`으로 재생을 멈춥니다.
+재생 목록 연속 재생을 끝내고 대상마다 `media_player.media_stop`으로 재생을 멈춥니다(정지를 지원하지 않고 일시정지만 되는 기기는 `media_pause`).
 
 ```yaml
 service: ytmusic_url_player.stop
@@ -151,14 +151,18 @@ data:
 1. URL 입력 → 플레이리스트 트랙 목록 조회
 2. QueueManager가 첫 번째 트랙 재생
 3. 트랙 종료 감지 (playing → idle) 시 다음 트랙 자동 재생. 재생 명령 직후 10초 안의 idle은 이전 콘텐츠가 멈춘 것으로 보고 무시합니다.
-4. 재생 명령 후 90초가 지나도 기기가 재생 중이 아니면 그 곡을 건너뜁니다.
-5. 마지막 곡 다음: 순차반복·랜덤재생은 처음부터 다시, 1회재생은 종료
+4. 재생 명령 후 90초가 지나도 기기가 재생 중(playing·paused·buffering·on)이 아니면 그 곡을 건너뜁니다. 그때 기기가 꺼짐·사용 불가·알 수 없음 상태이면 재생 목록을 끝냅니다.
+5. 재생 명령 실패나 시작 안 됨이 3곡 연속이면 재생 목록을 끝냅니다.
+6. 마지막 곡 다음: 순차반복·랜덤재생은 처음부터 다시, 1회재생은 종료
 
 ### 재생 목록이 끝나는 경우
 - `ytmusic_url_player.stop` 호출
 - 같은 기기로 다른 URL(단일 곡 또는 다른 재생 목록) 재생
-- Home Assistant에서 그 기기로 `media_player.media_stop`·`turn_off`를 호출하거나, 다른 콘텐츠를 `media_player.play_media`로 재생 (`entity_id`로 지정한 호출)
+- Home Assistant에서 그 기기로 `media_player.media_stop`·`turn_off`를 호출하거나, 다른 콘텐츠를 `media_player.play_media`로 재생 (`entity_id`·기기·영역 대상, `all` 포함)
 - 기기가 꺼짐(`off`)
+- 위 4·5의 경우
+
+TTS 안내(`tts.speak` 등 `announce` 재생)와 `enqueue: add`/`next`로 추가하는 `play_media`는 재생 목록을 끝내지 않습니다.
 
 > 기기 자체(음성 명령·기기 앱)에서 정지하면 곡이 정상적으로 끝난 것과 구분할 수 없어 다음 곡이 재생될 수 있습니다. 이때는 Home Assistant에서 정지하거나 `ytmusic_url_player.stop`을 사용하세요.
 
@@ -168,11 +172,11 @@ data:
 
 미디어 플레이어는 Home Assistant 로그인 정보 없이 `/api/ytmusic_url_player/stream/<videoId>`를 가져갑니다. 이 주소가 인터넷에 노출돼도 아무 영상이나 프록시하지 않도록 다음처럼 제한합니다.
 
-- 인증 없는 스트림 요청: 이 통합이 재생하거나 큐·M3U에 넣은 영상만 24시간 동안 허용 (최대 1000개, Home Assistant 재시작 시 초기화)
-- Home Assistant 인증 요청(토큰·서명 URL): 항상 허용
-- `/api/ytmusic_url_player/m3u/<listId>.m3u`: 사용자 YouTube 쿠키로 비공개 목록(예: `LM`)까지 읽으므로 Home Assistant 인증 필요
+- 인증 없는 스트림 요청: 이 통합이 재생 명령을 보낸 곡과 M3U에 넣은 곡만 24시간 동안 허용 (최대 10000개, Home Assistant 재시작이나 옵션 저장 때 초기화)
+- Home Assistant 인증 요청(토큰·서명 URL): 항상 허용. Cast·Sonos·DLNA 등 Home Assistant 기본 미디어 플레이어 통합은 이 주소에 서명을 붙여 기기로 보내므로 그대로 동작합니다.
+- `/api/ytmusic_url_player/m3u/<listId>.m3u`: 사용자 YouTube 쿠키로 비공개 목록(예: `LM`)까지 읽으므로 Home Assistant 인증 필요. Home Assistant는 쿼리가 붙은 주소에 서명하지 않으므로, 믹스용 `?v=` 주소는 외부 플레이어에서 쓰려면 아래 옵션이 필요합니다.
 
-이전처럼 인증 없이 모두 허용하려면 옵션 `allow_unauthenticated_streams`를 켭니다(권장하지 않음).
+Home Assistant 밖(VLC, 스크립트, 저장해 둔 주소)에서 스트림·M3U 주소를 직접 쓰던 경우 1.10.0부터 403/401이 납니다. 이전처럼 인증 없이 모두 허용하려면 옵션 `allow_unauthenticated_streams`를 켭니다(권장하지 않음).
 
 ---
 
@@ -228,12 +232,12 @@ MIT License
 
 ## 통합 업데이트 1.10.0
 
-- 재생 목록을 끝낼 수 있습니다: `ytmusic_url_player.stop` 서비스를 추가했고, 같은 기기로 다른 URL을 재생하거나 Home Assistant에서 정지·끄기·다른 콘텐츠 재생을 하면 큐가 끝납니다. 기기가 꺼져도 끝납니다.
+- 재생 목록을 끝낼 수 있습니다: `ytmusic_url_player.stop` 서비스를 추가했고, 같은 기기로 다른 URL을 재생하거나 Home Assistant에서 정지·끄기·다른 콘텐츠 재생을 하면 큐가 끝납니다. 기기가 꺼져도 끝납니다. TTS 안내는 재생 목록을 끝내지 않습니다.
 - 새 재생 목록을 시작할 때 이전 콘텐츠가 멈추며 첫 곡을 건너뛰던 문제를 고쳤습니다.
-- 재생 명령이 실패한 곡과 90초 안에 재생이 시작되지 않은 곡은 건너뜁니다(전에는 큐가 멈춰 있었음).
-- 인증 없는 스트림 요청은 이 통합이 재생한 곡만 받고, M3U는 Home Assistant 인증이 필요합니다. 이전 방식은 `allow_unauthenticated_streams` 옵션으로 켤 수 있습니다.
+- 재생 명령이 실패한 곡과 90초 안에 재생이 시작되지 않은 곡은 건너뛰고(전에는 큐가 멈춰 있었음), 3곡 연속 실패하거나 기기가 꺼짐·사용 불가이면 재생 목록을 끝냅니다.
+- **호환성 주의**: 인증 없는 스트림 요청은 이 통합이 재생한 곡만 받고, M3U는 Home Assistant 인증이 필요합니다. Home Assistant 밖에서 이 주소를 직접 쓰던 경우 `allow_unauthenticated_streams` 옵션으로 이전 방식을 켤 수 있습니다.
 - yt-dlp가 YouTube TLS 인증서를 검증합니다. `po_token`·`visitor_data`를 pytubefix 폴백 추출에 사용합니다.
-- Cast 기기 이름이 겹칠 때(예: `거실`과 `거실 TV`) 정확히 같은 이름을 먼저 고릅니다.
+- Cast 기기 이름이 겹칠 때(예: `거실`과 `거실 TV`) Cast UUID로 먼저 찾고, 다음으로 정확히 같은 이름을 고릅니다.
 - README·설정 화면 문구를 실제 동작에 맞췄고, 한국어 옵션 화면 번역을 추가했습니다.
 - 최소 Home Assistant 버전 표기를 2025.7.0으로 정정했습니다. 의존성이 그 이전 버전에는 설치되지 않습니다(1.9.x도 같음).
 - 도메인·엔티티·기존 설정 키·`play_url` 인자·스트림 URL 형식·재생 모드는 바꾸지 않았습니다.
