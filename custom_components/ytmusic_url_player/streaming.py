@@ -9,7 +9,7 @@ from typing import Any, Optional
 from weakref import WeakValueDictionary
 
 from aiohttp import web, ClientSession, ClientTimeout
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import KEY_AUTHENTICATED, HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.network import get_url
 
@@ -25,9 +25,13 @@ except ImportError:
 
 from .const import (
     DOMAIN,
+    CONF_ALLOW_UNAUTHENTICATED,
     CONF_PO_TOKEN,
     CONF_VISITOR_DATA,
+    DEFAULT_ALLOW_UNAUTHENTICATED,
     STREAM_CACHE_TTL_SECONDS,
+    STREAM_GRANT_MAX_ENTRIES,
+    STREAM_GRANT_TTL_SECONDS,
     API_STREAM_PATH,
     API_M3U_PATH,
 )
@@ -36,10 +40,19 @@ from .ytmusic_client import YTMusicClient
 _LOGGER = logging.getLogger(__name__)
 
 # YouTube video IDs and playlist/browse IDs are restricted to an unpadded
-# base64url alphabet. These endpoints are unauthenticated, so reject anything
-# outside that alphabet before it reaches a YouTube request or the executor.
+# base64url alphabet. These endpoints also take unauthenticated requests from
+# media players, so reject anything outside that alphabet before it reaches a
+# YouTube request or the executor.
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _LIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _is_authenticated(request: web.Request) -> bool:
+    """True when Home Assistant authenticated the request (token or signed URL)."""
+    try:
+        return bool(request.get(KEY_AUTHENTICATED, False))
+    except AttributeError:
+        return False
 
 
 @dataclass
@@ -61,10 +74,39 @@ class StreamExtractor:
         self._cache: dict[str, dict[str, Any]] = {}
         self._metadata_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         # po_token for bot detection bypass
-        self._po_token = config.get(CONF_PO_TOKEN, "").strip() or None
-        self._visitor_data = config.get(CONF_VISITOR_DATA, "").strip() or None
+        self._po_token = (config.get(CONF_PO_TOKEN) or "").strip() or None
+        self._visitor_data = (config.get(CONF_VISITOR_DATA) or "").strip() or None
         if self._po_token:
             _LOGGER.info("[Stream] po_token configured (length=%d)", len(self._po_token))
+        # Media players fetch stream URLs without Home Assistant credentials.
+        # Such requests are served only for tracks this integration played or
+        # listed (video_id -> monotonic expiry), unless the user opted in to
+        # the pre-1.10 open endpoints.
+        self.allow_unauthenticated = bool(
+            config.get(CONF_ALLOW_UNAUTHENTICATED, DEFAULT_ALLOW_UNAUTHENTICATED)
+        )
+        self._stream_grants: dict[str, float] = {}
+
+    def grant_stream(self, video_id: str) -> None:
+        """Let media players fetch this track without credentials for a while."""
+        now = time.monotonic()
+        self._stream_grants.pop(video_id, None)
+        self._stream_grants[video_id] = now + STREAM_GRANT_TTL_SECONDS
+        # Insertion order is expiry order, so expired grants sit at the front.
+        while self._stream_grants:
+            oldest = next(iter(self._stream_grants))
+            if self._stream_grants[oldest] > now:
+                break
+            del self._stream_grants[oldest]
+        while len(self._stream_grants) > STREAM_GRANT_MAX_ENTRIES:
+            self._stream_grants.pop(next(iter(self._stream_grants)))
+
+    def stream_open_without_auth(self, video_id: str) -> bool:
+        """Whether an unauthenticated request may fetch this track."""
+        if self.allow_unauthenticated:
+            return True
+        until = self._stream_grants.get(video_id)
+        return until is not None and until > time.monotonic()
 
     async def async_get_audio(self, video_id: str) -> tuple[str, str, dict[str, str]]:
         """오디오 스트림 URL만 반환 (기존 호환성 유지)."""
@@ -103,6 +145,25 @@ class StreamExtractor:
 
             last_error = None
             yt = None
+
+            # A configured PO token and visitor data belong to the WEB client.
+            if self._po_token and self._visitor_data:
+                visitor_data, po_token = self._visitor_data, self._po_token
+                try:
+                    _LOGGER.debug("[Stream] Trying WEB client with po_token...")
+                    yt = YouTube(
+                        url,
+                        client="WEB",
+                        use_po_token=True,
+                        po_token_verifier=lambda: (visitor_data, po_token),
+                    )
+                    _ = yt.title
+                    _LOGGER.debug("[Stream] WEB client with po_token succeeded")
+                    clients_to_try = []
+                except Exception as e:
+                    _LOGGER.debug("[Stream] WEB client with po_token failed: %s", e)
+                    last_error = e
+                    yt = None
 
             for client in clients_to_try:
                 try:
@@ -166,7 +227,6 @@ class StreamExtractor:
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
-                'nocheckcertificate': True,
                 # v1.6 style: Better bot detection bypass
                 'extractor_args': {
                     'youtube': {
@@ -397,6 +457,15 @@ class YTMusicStreamView(HomeAssistantView):
             _LOGGER.error("No StreamExtractor available")
             return web.Response(status=500, text="Stream extractor not available")
 
+        if not _is_authenticated(request) and not extractor.stream_open_without_auth(video_id):
+            # A plain response, not HTTPUnauthorized: a speaker re-requesting
+            # an old URL must not count towards Home Assistant's IP ban.
+            _LOGGER.warning(
+                "[Proxy] Refused unauthenticated stream %s from %s (not played by this integration)",
+                video_id, request.remote,
+            )
+            return web.Response(status=403, text="Stream not available")
+
         # Pre-header failures already return an error response in async_proxy.
         # Post-header failures must propagate so aiohttp closes the connection.
         return await extractor.async_proxy(request, video_id)
@@ -419,6 +488,16 @@ class YTMusicM3UView(HomeAssistantView):
                     return client
         return None
 
+    def _get_extractor(self) -> StreamExtractor | None:
+        """Get StreamExtractor from the first available config entry."""
+        domain_data = self.hass.data.get(DOMAIN, {})
+        for entry_id, store in domain_data.items():
+            if isinstance(store, dict):
+                extractor = store.get("extractor")
+                if extractor is not None:
+                    return extractor
+        return None
+
     async def get(self, request: web.Request, list_id: str) -> web.Response:
         if not _LIST_ID_RE.match(list_id):
             _LOGGER.warning("[M3U] Rejected malformed list_id from %s", request.remote)
@@ -428,6 +507,15 @@ class YTMusicM3UView(HomeAssistantView):
         if seed_video_id is not None and not _VIDEO_ID_RE.match(seed_video_id):
             _LOGGER.warning("[M3U] Rejected malformed seed video id from %s", request.remote)
             return web.Response(status=400, text="Invalid seed video id")
+
+        extractor = self._get_extractor()
+        if not _is_authenticated(request) and not (
+            extractor is not None and extractor.allow_unauthenticated
+        ):
+            # The playlist is read with the user's YouTube cookies, so it may
+            # be private (for example LM, the liked songs).
+            _LOGGER.warning("[M3U] Refused unauthenticated playlist request from %s", request.remote)
+            return web.Response(status=401, text="Authentication required")
 
         client = self._get_client()
         if client is None:
@@ -445,8 +533,11 @@ class YTMusicM3UView(HomeAssistantView):
         lines = ["#EXTM3U"]
         for t in tracks:
             vid = t.get("videoId") or t.get("setVideoId")
-            if not vid:
+            if not vid or not _VIDEO_ID_RE.match(str(vid)):
                 continue
+            if extractor is not None:
+                # The player that reads this list fetches the tracks itself.
+                extractor.grant_stream(vid)
             title = t.get("title") or "YouTube Music"
             artists = t.get("artists") or []
             artist_name = ""

@@ -17,8 +17,10 @@ from .const import (
     CONF_AUTO_PLAY,
     CONF_PO_TOKEN,
     CONF_VISITOR_DATA,
+    CONF_ALLOW_UNAUTHENTICATED,
     DEFAULT_NAME,
     DEFAULT_AUTO_PLAY,
+    DEFAULT_ALLOW_UNAUTHENTICATED,
 )
 
 
@@ -58,6 +60,12 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             ): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
             ),
+            vol.Optional(
+                CONF_ALLOW_UNAUTHENTICATED,
+                default=bool(
+                    defaults.get(CONF_ALLOW_UNAUTHENTICATED, DEFAULT_ALLOW_UNAUTHENTICATED)
+                ),
+            ): bool,
         }
     )
 
