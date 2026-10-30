@@ -11,7 +11,7 @@
 
 ## Reporting a Vulnerability
 
-공개 이슈에 취약점 세부 내용을 올리지 말고, GitHub 저장소의 **Security → Report a vulnerability**(비공개 보고)로 알려 주세요. 재현 방법, 영향받는 버전, Home Assistant 버전을 함께 적어 주시면 확인이 빠릅니다.
+공개 이슈에 취약점 세부 내용을 올리지 말아 주세요. 이 저장소의 **Security** 탭에 **Report a vulnerability**(비공개 보고)가 보이면 그것을 사용해 주세요. 보이지 않으면 공개 이슈에는 영향받는 버전과 비공개 연락 요청만 남겨 주세요. 메인테이너가 비공개 보안 권고(GitHub draft security advisory)를 만들어 보고자를 초대하고, 세부 내용은 그 안에서 받습니다. 재현 방법, 영향받는 버전, Home Assistant 버전을 함께 적어 주시면 확인이 빠릅니다.
 
 보고에 YouTube 쿠키·`auth_file` 내용·`po_token`·Home Assistant 토큰 같은 비밀 값은 넣지 마세요.
 
