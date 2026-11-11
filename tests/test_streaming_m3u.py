@@ -339,6 +339,20 @@ class StreamingM3UTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.youtube_calls))
         self.assertEqual("https://audio.example/stream", metadata.stream_url)
 
+    async def test_ytdlp_lets_yt_dlp_choose_clients(self) -> None:
+        # Forcing ios/android/web with player_skip and an Android User-Agent left
+        # yt-dlp 2026.10 with only the muxed 360p video format (18) and no
+        # audio-only format; its own client defaults return m4a audio (140).
+        extractor = self.module.StreamExtractor(object(), {}, None)
+
+        await extractor.async_get_metadata(VIDEO_ID)
+
+        youtube_args = self.ytdlp_options.get("extractor_args", {}).get("youtube", {})
+        self.assertNotIn("player_client", youtube_args)
+        self.assertNotIn("player_skip", youtube_args)
+        self.assertNotIn("User-Agent", self.ytdlp_options.get("http_headers", {}))
+        self.assertEqual("bestaudio[ext=m4a]/bestaudio/best", self.ytdlp_options["format"])
+
     async def test_pytubefix_without_po_token_keeps_client_order(self) -> None:
         extractor = self.module.StreamExtractor(object(), {"po_token": "only-token"}, None)
 

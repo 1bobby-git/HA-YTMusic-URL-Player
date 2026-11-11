@@ -222,22 +222,14 @@ class StreamExtractor:
 
             _LOGGER.info("[Stream] Trying yt-dlp...")
 
+            # Leave the YouTube player clients and User-Agent to yt-dlp, which
+            # tracks which clients still serve audio. Forcing ios/android/web
+            # with an Android User-Agent left only the muxed 360p video format.
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio/best',
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
-                # v1.6 style: Better bot detection bypass
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['ios', 'android', 'web'],
-                        'player_skip': ['webpage', 'configs'],
-                    }
-                },
-                'http_headers': {
-                    'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                },
             }
 
             url = f"https://www.youtube.com/watch?v={video_id}"
