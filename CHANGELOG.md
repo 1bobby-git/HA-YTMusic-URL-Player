@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.1 — 2026-11-11
+
+- yt-dlp 추출에서 YouTube 플레이어 클라이언트(`ios`/`android`/`web`)·`player_skip`·Android User-Agent 강제 지정을 제거해 yt-dlp 기본 클라이언트를 사용. 이전 설정에서는 yt-dlp 2026.10.26 기준 오디오 전용 포맷이 하나도 오지 않아 360p 영상 mp4(itag 18, 응답 `video/mp4`)를 오디오로 넘겼고, 이제 오디오 전용(예: itag 140 `audio/mp4`)을 넘김
+- YouTube가 비로그인 재생을 거부하는 곡(예: YouTube Music 자동 생성 `- Topic` 음원 일부)은 이 변경으로도 재생되지 않음(yt-dlp·pytubefix 모두 "unavailable")
+- 도메인·엔티티·설정 키·`play_url` 인자·스트림 URL 형식·재생 모드·의존성 버전은 변경하지 않음
+
 ## 1.10.0 — 2026-10-30
 
 **호환성 주의**: Home Assistant 밖(VLC·스크립트·저장해 둔 주소)에서 `/api/ytmusic_url_player/stream/…`·`/m3u/…` 주소를 인증 없이 쓰던 경우 403/401이 납니다. 이전 동작은 옵션 `allow_unauthenticated_streams`로 켤 수 있습니다. Home Assistant의 재생 흐름(`play_url`, 텍스트 엔티티, Cast·Sonos·DLNA 등 서명 URL을 쓰는 플레이어)은 그대로 동작합니다.
